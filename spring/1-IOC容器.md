@@ -2083,3 +2083,125 @@ bean定义可以包含大量配置信息，包括构造函数参数、属性值�
 
 ## 1.8. 容器扩展点
 
+通常，应用程序开发人员不需要继承ApplicationContext实现类来进行扩展。相反，Spring IoC容器提供了一些特殊的集成接口来实现扩展。接下来的几节将描述这些集成接口。
+
+### 1.8.1. 使用BeanPostProcessor自定义bean
+
+BeanPostProcessor接口定义了您可以实现的回调方法，以提供您自己的(或覆盖容器的默认)**实例化逻辑、依赖关系解析逻辑**等等。如果您想在Spring容器完成bean的实例化、配置和初始化之后实现一些自定义逻辑，也可以插入一个或多个自定义BeanPostProcessor实现。
+
+BeanPostProcessor接口定义了您可以实现的回调方法，以提供您自己的(或覆盖容器的默认)实例化逻辑、依赖关系解析逻辑等等。如果您想在Spring容器完成bean的实例化、配置和初始化之后实现一些自定义逻辑，那么您可以插入一个或多个自定义BeanPostProcessor实现。
+
+您可以配置多个BeanPostProcessor实例，并且可以通过设置order属性来控制这些BeanPostProcessor实例运行的顺序。只有当BeanPostProcessor实现Ordered接口时，才能设置此属性。如果编写自己的BeanPostProcessor，也应该考虑实现Ordered接口。有关更多详细信息，请参阅BeanPostProcessor和Ordered接口的javadoc。另请参见关于BeanPostProcessor实例的编程注册的说明。
+
+> 扩展信息
+>
+> BeanPostProcessor实例对bean(或对象)实例进行操作。也就是说，Spring IoC容器实例化一个bean实例，然后BeanPostProcessor实例完成它们的工作。
+>
+> BeanPostProcessor实例的作用域是每个容器。这只与使用容器层次结构有关。如果在一个容器中定义BeanPostProcessor，则后处理器只处理该容器中的bean。换句话说，定义在一个容器中的bean不会被定义在另一个容器中的BeanPostProcessor后处理，即使两个容器都是相同层次结构的一部分。
+>
+> 要更改实际的bean定义(即定义bean的蓝图)，您需要使用BeanFactoryPostProcessor，如使用BeanFactoryPostProcessor自定义配置元数据中所述。
+
+org.springframework.beans.factory.config.BeanPostProcessor接口恰好包含两个回调方法。当这样的类被注册为容器的后处理器时，对于容器创建的每个bean实例，后处理器在调用容器初始化方法(如InitializingBean.afterPropertiesSet()或任何声明的初始化方法)之前和在任何bean初始化回调之后从容器获得回调。后处理器可以对bean实例采取任何操作，包括完全忽略回调。bean后处理器通常检查回调接口，或者用代理包装bean。一些Spring AOP基础结构类被实现为bean后处理器，以便提供代理包装逻辑。
+
+ApplicationContext自动检测在实现BeanPostProcessor接口的配置元数据中定义的任何bean。ApplicationContext将这些bean注册为后处理器，以便稍后在创建bean时调用它们。Bean后处理器可以以与任何其他Bean相同的方式部署在容器中。
+
+注意，当通过在配置类上使用@Bean工厂方法来声明BeanPostProcessor时，工厂方法的返回类型应该是实现类本身，或者至少是org.springframe.beans.factory .config.BeanPostProcessor接口，这清楚地表明了该bean的后处理器性质。否则，ApplicationContext不能在完全创建它之前根据类型自动检测它。由于BeanPostProcessor需要尽早实例化，以便应用于上下文中其他bean的初始化，因此这种早期的类型检测是至关重要的。
+
+> 以编程方式注册BeanPostProcessor实例
+> 虽然BeanPostProcessor注册的推荐方法是通过ApplicationContext自动检测(如前所述)，但您可以通过使用addBeanPostProcessor方法以编程方式向ConfigurableBeanFactory注册它们。当您需要在注册之前评估条件逻辑，或者甚至在层次结构的上下文中复制bean后处理器时，这非常有用。但是请注意，以编程方式添加的BeanPostProcessor实例不尊守Ordered接口。在这里，登记的顺序决定了执行的顺序。还要注意，**以编程方式注册的BeanPostProcessor实例总是在通过自动检测注册的实例之前处理，而不考虑任何显式的顺序。**
+
+> BeanPostProcessor实例和AOP自动代理
+> 实现BeanPostProcessor接口的类是特殊的，容器以不同的方式对待它们。它们直接引用的所有BeanPostProcessor实例和bean都在启动时实例化，作为ApplicationContext的特殊启动阶段的一部分。接下来，以排序的方式注册所有BeanPostProcessor实例，并将其应用于容器中的所有其他bean。因为AOP自动代理是作为BeanPostProcessor本身实现的，所以无论是BeanPostProcessor实例还是它们直接引用的bean都不适合进行自动代理，因此，它们没有嵌入方面。
+>
+> 对于任何这样的bean，您应该看到一条信息日志消息:`Bean someBean is not eligible for getting processed by all BeanPostProcessor interfaces (for example: not eligible for auto-proxying)`.
+>
+> 如果通过使用自动装配或@Resource(可能会退回到自动装配)将bean连接到BeanPostProcessor中，那么在搜索类型匹配依赖项候选项时，Spring可能会访问意外bean，从而使它们不符合自动代理或其他类型的bean后处理的条件。例如，如果您有一个用@Resource注释的依赖项，其中字段或setter名称不直接对应于bean声明的名称，并且没有使用name属性，那么Spring将访问其他bean以按类型匹配它们。
+
+下面的示例演示如何在ApplicationContext中编写、注册和使用BeanPostProcessor实例。
+
+#### 示例：Hello World, `BeanPostProcessor`-style
+
+第一个示例演示了基本用法。该示例显示了一个自定义BeanPostProcessor实现，该实现在容器创建每个bean时调用其toString()方法，并将结果字符串打印到系统控制台。
+
+下面的清单显示了自定义BeanPostProcessor实现类定义:
+
+```java
+package scripting;
+
+import org.springframework.beans.factory.config.BeanPostProcessor;
+
+public class InstantiationTracingBeanPostProcessor implements BeanPostProcessor {
+
+    // simply return the instantiated bean as-is
+    public Object postProcessBeforeInitialization(Object bean, String beanName) {
+        return bean; // we could potentially return any object reference here...
+    }
+
+    public Object postProcessAfterInitialization(Object bean, String beanName) {
+        System.out.println("Bean '" + beanName + "' created : " + bean.toString());
+        return bean;
+    }
+}
+```
+
+下面的bean元素使用了InstantiationTracingBeanPostProcessor:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:lang="http://www.springframework.org/schema/lang"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/lang
+        https://www.springframework.org/schema/lang/spring-lang.xsd">
+    <!-- 使用groovy语言实现的一个bean定义-->
+    <lang:groovy id="messenger"
+            script-source="classpath:org/springframework/scripting/groovy/Messenger.groovy">
+        <lang:property name="message" value="Fiona Apple Is Just So Dreamy."/>
+    </lang:groovy>
+    <!--
+    when the above bean (messenger) is instantiated, this custom
+    BeanPostProcessor implementation will output the fact to the system console
+    -->
+    <bean class="scripting.InstantiationTracingBeanPostProcessor"/>
+
+</beans>
+```
+
+注意如何定义InstantiationTracingBeanPostProcessor。它甚至没有名称，而且因为它是bean，所以可以像其他bean一样对它进行依赖注入。
+
+以下Java应用程序运行上述代码和配置:
+
+```java
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.support.ClassPathXmlApplicationContext;
+import org.springframework.scripting.Messenger;
+
+public final class Boot {
+
+    public static void main(final String[] args) throws Exception {
+        ApplicationContext ctx = new ClassPathXmlApplicationContext("scripting/beans.xml");
+        Messenger messenger = ctx.getBean("messenger", Messenger.class);
+        System.out.println(messenger);
+    }
+
+}
+```
+
+上述应用程序的输出如下所示:
+
+```
+Bean 'messenger' created : org.springframework.scripting.groovy.GroovyMessenger@272961
+org.springframework.scripting.groovy.GroovyMessenger@272961
+```
+
+#### 示例：`AutowiredAnnotationBeanPostProcessor`
+
+将回调接口或注解与自定义BeanPostProcessor实现结合使用是扩展Spring IoC容器的常用方法。一个例子是Spring的AutowiredAnnotationBeanPostProcessor—一个BeanPostProcessor实现，它附带Spring发行版和自动连接注释字段、setter方法和任意配置方法。
+
+### 1.8.2. 使用BeanFactoryPostProcessor自定义配置元数据
+
+我们查看的下一个扩展点是org.springframework.beans.factory.config.BeanFactoryPostProcessor。该接口的语义与BeanPostProcessor的语义相似，有一个主要区别:BeanFactoryPostProcessor操作bean配置元数据。也就是说，Spring IoC容器允许BeanFactoryPostProcessor读取配置元数据，并可能在容器实例化BeanFactoryPostProcessor实例以外的任何bean之前更改配置元数据。
+
+您可以配置多个BeanFactoryPostProcessor实例，并且可以通过设置order属性来控制这些BeanFactoryPostProcessor实例的运行顺序。但是，如果BeanFactoryPostProcessor实现了Ordered接口，则只能设置此属性。如果编写自己的BeanFactoryPostProcessor，也应该考虑实现Ordered接口。有关更多详细信息，请参阅BeanFactoryPostProcessor和Ordered接口的javadoc。

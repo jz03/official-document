@@ -3074,13 +3074,145 @@ public class MovieRecommender {
 
 ① context字段是基于已知的可解析依赖类型注入的:ApplicationContext。
 
+### 1.9.8. 使用@Value
 
+@Value通常用于注入外部属性:
 
+```java
+@Component
+public class MovieRecommender {
 
+    private final String catalog;
 
+    public MovieRecommender(@Value("${catalog.name}") String catalog) {
+        this.catalog = catalog;
+    }
+}
+```
 
+使用以下配置:
 
+```java
+@Configuration
+@PropertySource("classpath:application.properties")
+public class AppConfig { }
+```
 
+以及下面的应用application.properties文件:
+
+```
+catalog.name=MovieCatalog
+```
+
+在这种情况下，catalog参数和字段将等于MovieCatalog值。
+
+Spring提供了一个默认的宽宏大量的嵌入式值解析器。它将尝试解析属性值，如果无法解析，则将属性名(例如${catalog.name})作为值注入。如果你想对不存在的值保持严格的控制，你应该声明一个PropertySourcesPlaceholderConfigurer bean，如下面的例子所示:
+
+```java
+@Configuration
+public class AppConfig {
+
+    @Bean
+    public static PropertySourcesPlaceholderConfigurer propertyPlaceholderConfigurer() {
+        return new PropertySourcesPlaceholderConfigurer();
+    }
+}
+```
+
+> 扩展信息
+>
+> 当使用JavaConfig配置PropertySourcesPlaceholderConfigurer时，@Bean方法必须是静态的。
+
+如果任何${}占位符无法解析，使用上述配置可确保Spring初始化失败。也可以使用setPlaceholderPrefix、setPlaceholderSuffix或setValueSeparator等方法来定制占位符。
+
+> 扩展信息
+>
+> Spring Boot默认配置一个PropertySourcesPlaceholderConfigurer bean，它将从application.properties和application.yml文件中获取属性。
+
+Spring提供的内置转换器支持允许自动处理简单的类型转换(例如Integer或int)。多个逗号分隔的值可以自动转换为String数组，无需额外的工作。
+
+可以提供如下的默认值:
+
+```java
+@Component
+public class MovieRecommender {
+
+    private final String catalog;
+
+    public MovieRecommender(@Value("${catalog.name:defaultCatalog}") String catalog) {
+        this.catalog = catalog;
+    }
+}
+```
+
+Spring BeanPostProcessor在幕后使用ConversionService来处理将@Value中的String值转换为目标类型的过程。如果你想为你自己的自定义类型提供转换支持，你可以提供你自己的ConversionService bean实例，如下例所示:
+
+```java
+@Configuration
+public class AppConfig {
+
+    @Bean
+    public ConversionService conversionService() {
+        DefaultFormattingConversionService conversionService = new DefaultFormattingConversionService();
+        conversionService.addConverter(new MyCustomConverter());
+        return conversionService;
+    }
+}
+```
+
+当@Value包含SpEL表达式时，该值将在运行时动态计算，如下例所示:
+
+```java
+@Component
+public class MovieRecommender {
+
+    private final String catalog;
+
+    public MovieRecommender(@Value("#{systemProperties['user.catalog'] + 'Catalog' }") String catalog) {
+        this.catalog = catalog;
+    }
+}
+```
+
+SpEL还支持使用更复杂的数据结构:
+
+```java
+@Component
+public class MovieRecommender {
+
+    private final Map<String, Integer> countOfMoviesPerCatalog;
+
+    public MovieRecommender(
+            @Value("#{{'Thriller': 100, 'Comedy': 300}}") Map<String, Integer> countOfMoviesPerCatalog) {
+        this.countOfMoviesPerCatalog = countOfMoviesPerCatalog;
+    }
+}
+```
+
+### 1.9.9. 使用`@PostConstruct` 和 `@PreDestroy`
+
+CommonAnnotationBeanPostProcessor不仅可以识别@Resource注释，还可以识别JSR-250生命周期注释:javax.annotation.PostConstruct和javax.annotation.PreDestroy。在Spring 2.5中引入了对这些注释的支持，为初始化回调和销毁回调中描述的生命周期回调机制提供了另一种选择。假设CommonAnnotationBeanPostProcessor是在Spring ApplicationContext中注册的，那么一个携带这些注释的方法将在生命周期中与相应的Spring生命周期接口方法或显式声明的回调方法相同的位置被调用。在下面的例子中，缓存在初始化时被预填充，在销毁时被清除:
+
+```java
+public class CachingMovieLister {
+
+    @PostConstruct
+    public void populateMovieCache() {
+        // populates the movie cache upon initialization...
+    }
+
+    @PreDestroy
+    public void clearMovieCache() {
+        // clears the movie cache upon destruction...
+    }
+}
+```
+
+有关组合各种生命周期机制的效果的详细信息，请参见组合生命周期机制。
+
+> 扩展信息
+>
+> 像@Resource一样，@PostConstruct和@PreDestroy注释类型也是JDK 6到8标准Java库的一部分。然而，整个javax.annotation包从JDK 9的核心Java模块中分离出来，最终在JDK 11中被移除。如果需要javax.annotation-api。现在需要通过Maven Central获得工件，只需像其他库一样将其添加到应用程序的类路径中即可。
 
 
 

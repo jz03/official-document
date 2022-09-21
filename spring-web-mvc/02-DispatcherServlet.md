@@ -260,7 +260,7 @@ DispatcherServlet处理请求如下:
 - 区域设置解析器被绑定到请求，以让流程中的元素解析处理请求时使用的区域设置(呈现视图、准备数据等)。如果不需要区域设置解析，则不需要区域设置解析器。
 - 主题解析器被绑定到请求，以让视图等元素决定使用哪个主题。如果不使用主题，可以忽略它。
 - 如果指定了多部分文件解析器，则将对请求进行多部分检查。如果发现了多个部分，则将请求包装在MultipartHttpServletRequest中，以供流程中的其他元素进一步处理。有关多部分处理的更多信息，请参见多部分解析器。
-- 搜索合适的处理程序。如果找到一个处理程序，则运行与该处理程序(预处理器、后处理器和控制器)相关联的执行链，以准备一个用于呈现的模型。另外，对于带注释的控制器，可以呈现响应(在HandlerAdapter中)，而不是返回视图。
+- 搜索合适的处理程序。如果找到一个处理程序，则运行与该处理程序(预处理器、后处理器和控制器)相关联的执行链，以准备一个用于呈现的模型。另外，对于带注解的控制器，可以呈现响应(在HandlerAdapter中)，而不是返回视图。
 - 如果返回模型，则呈现视图。如果没有返回模型(可能是由于预处理器或后处理器拦截了请求，也可能是出于安全原因)，则不会呈现视图，因为请求可能已经被满足了。
 
 在WebApplicationContext中声明的HandlerExceptionResolver bean用于解决请求处理期间抛出的异常。这些异常解析器允许自定义处理异常的逻辑。有关更多详细信息，请参见异常。
@@ -290,5 +290,85 @@ servletPath和pathInfo是经过解码的，这使得它们不可能直接与完�
 
 ### 1.1.7. 拦截
 
+所有HandlerMapping实现都支持处理程序拦截器，当您希望将特定功能应用于某些请求时(例如，检查主体)，这些拦截器非常有用。拦截器必须从org.springframework.web.servlet包中实现HandlerInterceptor，它有三个方法，应该提供足够的灵活性来进行各种预处理和后处理:
 
+- `preHandle(..)`:在实际处理程序运行之前
+- `postHandle(..)`: 在运行处理程序之后
+- `fterCompletion(..)`:在完成完整的请求之后
+
+preHandle(..)方法返回一个布尔值。您可以使用此方法中断或继续执行链的处理。当此方法返回true时，处理程序执行链将继续。当它返回false时，DispatcherServlet假定拦截器本身已经处理了请求(并且，例如，呈现了一个适当的视图)，不再继续执行执行链中的其他拦截器和实际的处理程序。
+
+有关如何配置拦截器的示例，请参见MVC配置部分中的拦截器。还可以通过在单独的HandlerMapping实现上使用setter直接注册它们。
+
+对于@ResponseBody和ResponseEntity方法，postHandle方法就不太有用了，因为它们的响应是在HandlerAdapter内部和postHandle之前编写和提交的。这意味着要对响应进行任何更改(例如添加额外的标头)都太晚了。对于这样的场景，您可以实现ResponseBodyAdvice并将其声明为Controller Advice bean，或者直接在RequestMappingHandlerAdapter上配置它。
+
+### 1.1.8. 异常
+
+如果在请求映射期间发生异常或从请求处理程序(例如@Controller)抛出异常，DispatcherServlet将委托给HandlerExceptionResolver bean链来解决异常并提供替代处理，这通常是一个错误响应。
+
+下表列出了可用的HandlerExceptionResolver实现:
+
+| HandlerExceptionResolver实现类                               | 说明                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| SimpleMappingExceptionResolver                               | 异常类名和错误视图名之间的映射。用于在浏览器应用程序中呈现错误页面。 |
+| [`DefaultHandlerExceptionResolver`](https://docs.spring.io/spring-framework/docs/5.3.23/javadoc-api/org/springframework/web/servlet/mvc/support/DefaultHandlerExceptionResolver.html) | 解决Spring MVC引发的异常，并将它们映射到HTTP状态码。参见可选的ResponseEntityExceptionHandler和REST API异常。 |
+| ResponseStatusExceptionResolver                              | 使用@ResponseStatus注解解决异常，并基于注解中的值将其映射到HTTP状态码。 |
+| ExceptionHandlerExceptionResolver                            | 通过调用@Controller或@ControllerAdvice类中的@ExceptionHandler方法来解决异常。看到@ExceptionHandler方法。 |
+
+#### 解析器链
+
+您可以通过在Spring配置中声明多个HandlerExceptionResolver bean并根据需要设置它们的顺序属性来形成异常解析器链。顺序属性越高，异常解析器的位置越晚。
+
+HandlerExceptionResolver的契约指定它可以返回:
+
+- 指向错误视图的ModelAndView。
+- 如果异常是在解析器中处理的，则为空ModelAndView。
+- 如果异常仍然未解决，则为null，以便后续的解析器尝试;如果异常在结束时仍然存在，则允许它向上冒泡到Servlet容器。
+
+MVC Config会自动为默认的Spring MVC异常、@ResponseStatus注释异常以及对@ExceptionHandler方法的支持声明内置解析器。您可以自定义该列表或替换它。
+
+#### 容器错误页面
+
+如果任何HandlerExceptionResolver仍然无法解析异常，因此让其传播，或者将响应状态设置为错误状态(即4xx, 5xx)， Servlet容器可以用HTML呈现默认的错误页面。要自定义容器的默认错误页面，可以在web.xml中声明一个错误页面映射。下面的例子展示了如何做到这一点:
+
+```xml
+<error-page>
+    <location>/error</location>
+</error-page>
+```
+
+对于前面的示例，当出现异常或响应具有错误状态时，Servlet容器在容器内向配置的URL(例如/error)发出error分派。然后DispatcherServlet对其进行处理，可能将其映射到@Controller，它可以被实现为返回带有模型的错误视图名或呈现JSON响应，如下面的示例所示:
+
+```java
+@RestController
+public class ErrorController {
+
+    @RequestMapping(path = "/error")
+    public Map<String, Object> handle(HttpServletRequest request) {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("status", request.getAttribute("javax.servlet.error.status_code"));
+        map.put("reason", request.getAttribute("javax.servlet.error.message"));
+        return map;
+    }
+}
+```
+
+> 说明
+>
+> Servlet API不提供在Java中创建错误页面映射的方法。但是，您可以同时使用WebApplicationInitializer和最小的web.xml。
+
+### 1.1.9. 视图解析
+
+Spring MVC定义了ViewResolver和View接口，使您可以在浏览器中呈现模型，而无需将您绑定到特定的视图技术。ViewResolver提供了视图名称和实际视图之间的映射。视图处理在移交给特定视图技术之前的数据准备。
+
+下表提供了ViewResolver层次结构的更多细节:
+
+| 视图解析器                     | 描述                                                         |
+| ------------------------------ | ------------------------------------------------------------ |
+| AbstractCachingViewResolver    | AbstractCachingViewResolver的子类缓存它们解析的实例。缓存可以提高某些视图技术的性能。您可以通过将缓存属性设置为false来关闭缓存。此外，如果你必须在运行时刷新某个视图(例如，当FreeMarker模板被修改时)，你可以使用removeFromCache(String viewName, Locale loc)方法。 |
+| UrlBasedViewResolver           | ViewResolver接口的简单实现，该接口直接将逻辑视图名解析为url，无需显式映射定义。如果您的逻辑名以直接的方式匹配视图资源的名称，而不需要任意的映射，那么这是合适的。 |
+| InternalResourceViewResolver   | UrlBasedViewResolver的方便子类，它支持InternalResourceView(实际上，servlet和jsp)和JstlView和TilesView等子类。您可以使用setViewClass(..)为这个解析器生成的所有视图指定视图类。详见UrlBasedViewResolver javadoc。 |
+| FreeMarkerViewResolver         | UrlBasedViewResolver的方便子类，支持FreeMarkerView和它们的自定义子类。 |
+| ContentNegotiatingViewResolver | ViewResolver接口的实现，该接口基于请求文件名或Accept头解析视图。看到内容协商。 |
+| BeanNameViewResolver           | ViewResolver接口的实现，该接口将视图名称解释为当前应用程序上下文中的bean名称。这是一个非常灵活的变体，它允许根据不同的视图名称混合和匹配不同的视图类型。每个这样的视图都可以定义为一个bean，例如在XML或配置类中。 |
 

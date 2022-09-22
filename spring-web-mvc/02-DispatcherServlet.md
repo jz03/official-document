@@ -372,3 +372,120 @@ Spring MVC定义了ViewResolver和View接口，使您可以在浏览器中呈现
 | ContentNegotiatingViewResolver | ViewResolver接口的实现，该接口基于请求文件名或Accept头解析视图。看到内容协商。 |
 | BeanNameViewResolver           | ViewResolver接口的实现，该接口将视图名称解释为当前应用程序上下文中的bean名称。这是一个非常灵活的变体，它允许根据不同的视图名称混合和匹配不同的视图类型。每个这样的视图都可以定义为一个bean，例如在XML或配置类中。 |
 
+#### 处理
+
+您可以通过声明多个解析器bean来链接视图解析器，如果有必要，还可以通过设置order属性来指定顺序。记住，顺序属性越高，视图解析器在链中的位置越晚。
+
+ViewResolver的契约指定它可以返回null来表示无法找到视图。然而，在JSP和InternalResourceViewResolver的情况下，确定JSP是否存在的唯一方法是通过RequestDispatcher执行分派。因此，您必须始终将InternalResourceViewResolver配置为在视图解析器的总体顺序中位于最后。
+
+配置视图解析就像向Spring配置中添加ViewResolver bean一样简单。MVC配置为视图解析器和添加无逻辑视图控制器提供了专用的配置API，这对于没有控制器逻辑的HTML模板渲染非常有用。
+
+#### 重定向
+
+视图名中的特殊前缀允许执行重定向。UrlBasedViewResolver(及其子类)将此识别为需要重定向的指令。视图名的其余部分是重定向URL。
+
+最终效果与控制器返回一个RedirectView是一样的，但是现在控制器本身可以根据逻辑视图名进行操作。逻辑视图名(例如redirect:/myapp/some/resource)相对于当前Servlet上下文重定向，而像redirect:https://myhost.com/some/arbitrary/path这样的名称则重定向到一个绝对URL。
+
+注意，如果控制器方法使用@ResponseStatus注释，那么注释值优先于RedirectView设置的响应状态。
+
+#### 转发
+
+您还可以使用一个特殊的转发:前缀来表示最终由UrlBasedViewResolver及其子类解析的视图名称。这将创建一个InternalResourceView，它执行RequestDispatcher.forward()。因此，这个前缀对于InternalResourceViewResolver和InternalResourceView(对于JSP)没有用处，但是如果您使用另一种视图技术，但仍然希望强制转发由Servlet/JSP引擎处理的资源，那么它会很有帮助。注意，您也可以连接多个视图解析器。
+
+#### 内容协商
+
+ContentNegotiatingViewResolver不解析视图本身，而是委托给其他视图解析器，并选择与客户端请求的表示相似的视图。可以从Accept报头或查询参数(例如，"/path?format=pdf")确定表示形式。
+
+ContentNegotiatingViewResolver通过比较请求媒体类型和与每个viewresolver相关联的视图支持的媒体类型(也称为Content-Type)来选择一个适当的视图来处理请求。列表中第一个具有兼容Content-Type的视图将表示形式返回给客户端。如果ViewResolver链不能提供兼容的视图，则会参考通过DefaultViews属性指定的视图列表。后一种选项适用于单例视图，它可以呈现当前资源的适当表示，而不管逻辑视图名是什么。Accept报头可以包含通配符(例如text/*)，在这种情况下，内容类型为text/xml的视图是兼容的匹配。
+
+### 1.1.10. 本地化
+
+### 1.1.11.主题
+
+您可以应用Spring Web MVC框架主题来设置应用程序的整体外观，从而增强用户体验。主题是静态资源的集合，通常是样式表和图像，它们会影响应用程序的视觉样式。
+
+### 1.1.12. Multipart 解析器
+
+MultipartResolver来自于org.springframework.web.multipart包，它是一种解析包括文件上传在内的multipart 请求的策略。一种是基于Commons FileUpload的实现，另一种是基于Servlet 3.0的multipart 请求解析。
+
+要启用多部分处理，您需要在DispatcherServlet Spring配置中声明MultipartResolver bean，名称为MultipartResolver。DispatcherServlet检测它并将其应用于传入的请求。当接收到内容类型为multipart/form-data的POST时，解析器解析内容，将当前HttpServletRequest包装为MultipartHttpServletRequest，以提供对解析文件的访问，并将部分作为请求参数公开。
+
+#### Apache Commons `FileUpload`
+
+要使用Apache Commons FileUpload，您可以配置一个名为multipartResolver的CommonsMultipartResolver类型的bean。您还需要将commons-fileupload jar作为类路径的依赖项。
+
+这个解析器变体委托给应用程序中的本地库，提供了最大的Servlet容器间可移植性。作为一种替代方案，可以考虑通过容器自己的解析器进行标准Servlet多部分解析，如下所述。
+
+> 扩展信息
+>
+> Commons FileUpload传统上只应用于POST请求，但接受任何多部分/内容类型。有关详细信息和配置选项，请参阅CommonsMultipartResolver javadoc。
+
+#### Servlet 3.0
+
+Servlet 3.0多部分解析需要通过Servlet容器配置来启用。这样做:
+
+- 在Java中，在Servlet注册中设置MultipartConfigElement。
+- 在web.xml配置文件中，在servlet中声明<multipart-config>
+
+下面的例子展示了如何在Servlet注册中设置MultipartConfigElement:
+
+```java
+public class AppInitializer extends AbstractAnnotationConfigDispatcherServletInitializer {
+
+    // ...
+
+    @Override
+    protected void customizeRegistration(ServletRegistration.Dynamic registration) {
+
+        // Optionally also set maxFileSize, maxRequestSize, fileSizeThreshold
+        registration.setMultipartConfig(new MultipartConfigElement("/tmp"));
+    }
+
+}
+```
+
+一旦Servlet 3.0配置就绪，您就可以添加一个名为multipartResolver的StandardServletMultipartResolver类型的bean。
+
+> 此解析器变体原样使用Servlet容器的多部分解析器，潜在地将应用程序暴露于容器实现差异。默认情况下，它将尝试用任何HTTP方法解析任何多部分/内容类型，但这在所有Servlet容器中可能不受支持。有关详细信息和配置选项，请参阅StandardServletMultipartResolver javadoc。
+
+### 1.1.13.日志
+
+Spring MVC中的调试级日志被设计成紧凑、最小和人性化的。它关注的是那些反复使用的高价值信息位，而不是那些只在调试特定问题时有用的信息位。
+
+跟踪级日志通常遵循与DEBUG相同的原则(例如，也不应该是消防水管)，但可以用于调试任何问题。此外，在TRACE和DEBUG中，一些日志消息可能显示不同级别的详细信息。
+
+好的日志记录来自于使用日志的经验。如果您发现任何不符合规定的目标，请告诉我们。
+
+#### 敏感数据
+
+DEBUG和TRACE日志可能记录敏感信息。这就是为什么默认情况下请求参数和报头是被屏蔽的，并且必须通过DispatcherServlet上的enableLoggingRequestDetails属性显式启用它们的完整登录。
+
+下面的例子展示了如何使用Java配置来实现这一点:
+
+```java
+public class MyInitializer
+        extends AbstractAnnotationConfigDispatcherServletInitializer {
+
+    @Override
+    protected Class<?>[] getRootConfigClasses() {
+        return ... ;
+    }
+
+    @Override
+    protected Class<?>[] getServletConfigClasses() {
+        return ... ;
+    }
+
+    @Override
+    protected String[] getServletMappings() {
+        return ... ;
+    }
+
+    @Override
+    protected void customizeRegistration(ServletRegistration.Dynamic registration) {
+        registration.setInitParameter("enableLoggingRequestDetails", "true");
+    }
+
+}
+```
+

@@ -325,7 +325,7 @@ HandlerExceptionResolver的契约指定它可以返回:
 - 如果异常是在解析器中处理的，则为空ModelAndView。
 - 如果异常仍然未解决，则为null，以便后续的解析器尝试;如果异常在结束时仍然存在，则允许它向上冒泡到Servlet容器。
 
-MVC Config会自动为默认的Spring MVC异常、@ResponseStatus注释异常以及对@ExceptionHandler方法的支持声明内置解析器。您可以自定义该列表或替换它。
+MVC Config会自动为默认的Spring MVC异常、@ResponseStatus注解异常以及对@ExceptionHandler方法的支持声明内置解析器。您可以自定义该列表或替换它。
 
 #### 容器错误页面
 
@@ -380,15 +380,15 @@ ViewResolver的契约指定它可以返回null来表示无法找到视图。然�
 
 配置视图解析就像向Spring配置中添加ViewResolver bean一样简单。MVC配置为视图解析器和添加无逻辑视图控制器提供了专用的配置API，这对于没有控制器逻辑的HTML模板渲染非常有用。
 
-#### 重定向
+#### 重定向（Redirecting）
 
 视图名中的特殊前缀允许执行重定向。UrlBasedViewResolver(及其子类)将此识别为需要重定向的指令。视图名的其余部分是重定向URL。
 
 最终效果与控制器返回一个RedirectView是一样的，但是现在控制器本身可以根据逻辑视图名进行操作。逻辑视图名(例如redirect:/myapp/some/resource)相对于当前Servlet上下文重定向，而像redirect:https://myhost.com/some/arbitrary/path这样的名称则重定向到一个绝对URL。
 
-注意，如果控制器方法使用@ResponseStatus注释，那么注释值优先于RedirectView设置的响应状态。
+注意，如果控制器方法使用@ResponseStatus注解，那么注解值优先于RedirectView设置的响应状态。
 
-#### 转发
+#### 转发（Forwarding）
 
 您还可以使用一个特殊的转发:前缀来表示最终由UrlBasedViewResolver及其子类解析的视图名称。这将创建一个InternalResourceView，它执行RequestDispatcher.forward()。因此，这个前缀对于InternalResourceViewResolver和InternalResourceView(对于JSP)没有用处，但是如果您使用另一种视图技术，但仍然希望强制转发由Servlet/JSP引擎处理的资源，那么它会很有帮助。注意，您也可以连接多个视图解析器。
 
@@ -488,4 +488,231 @@ public class MyInitializer
 
 }
 ```
+
+## 1.2.过滤器
+
+spring-web模块提供了一些有用的过滤器:
+
+### 1.2.1.表单数据
+
+浏览器只能通过HTTP GET或HTTP POST提交表单数据，但非浏览器客户端也可以使用HTTP PUT、PATCH和DELETE。Servlet API需要ServletRequest.getParameter*()方法来支持仅针对HTTP POST的表单字段访问。
+
+spring-web模块提供FormContentFilter来拦截内容类型为application/x-www-form-urlencoded的HTTP PUT、PATCH和DELETE请求，从请求体中读取表单数据，并包装ServletRequest以使表单数据通过ServletRequest. getparameter *()方法系列可用。
+
+### 1.2.2. 转发头
+
+当一个请求经过代理(例如负载平衡器)时，主机、端口和方案可能会发生变化，这使得从客户端角度创建指向正确的主机、端口和方案的链接成为一项挑战。
+
+
+
+RFC 7239定义了转发的HTTP头，代理可以使用它来提供关于原始请求的信息。还有其他非标准头文件，包括X-Forwarded-Host, X-Forwarded-Port, X-Forwarded-Proto, X-Forwarded-Ssl, and X-Forwarded-Prefix。
+
+ForwardedHeaderFilter是一个Servlet过滤器，它修改请求的目的是:a)根据转发头更改主机、端口和方案;b)删除这些头以消除进一步的影响。过滤器依赖于包装请求，因此排序上，必须在其他过滤器(如RequestContextFilter)之前，这些过滤器应该处理修改后的请求，而不是原始的请求。
+
+对于转发的标头有一些安全考虑，因为应用程序无法知道标头是由代理添加的(如预期的那样)还是由恶意客户端添加的。这就是为什么在信任边界上的代理应该配置为删除来自外部的不受信任的转发标头。您还可以使用removeOnly=true配置ForwardedHeaderFilter，在这种情况下，它删除不使用头文件。
+
+为了支持异步请求和错误分派，这个过滤器应该映射到DispatcherType.ASYNC和DispatcherType.ERROR。如果使用Spring框架的AbstractAnnotationConfigDispatcherServletInitializer(参见Servlet配置)，所有的过滤器都会自动为所有分派类型注册。然而，如果通过web.xml或通过FilterRegistrationBean在Spring Boot中注册过滤器，请确保包含DispatcherType.ASYNC和DispatcherType.ERROR。除了DispatcherType.REQUEST之外。
+
+### 1.2.3.Shallow ETag
+
+> ETag是URL的tag，用来标示URL对象是否改变。这样可以应用于客户端的缓存：服务器产生ETag，并在HTTP响应头中将其传送到客户端，服务器用它来判断页面是否被修改过，如果未修改返回304，无需传输整个对象。
+
+ShallowEtagHeaderFilter过滤器通过缓存写入响应的内容并从中计算MD5哈希值来创建一个“shallow”ETag。下次客户端发送时，它也执行同样的操作，但它也将计算值与If-None-Match请求头进行比较，如果两者相等，则返回304 (NOT_MODIFIED)。
+
+此策略节省了网络带宽，但不能节省CPU，因为必须为每个请求计算完整响应。前面描述的控制器级别的其他策略可以避免计算。参考HTTP缓存。
+
+这个过滤器有一个writeWeakETag参数，它将过滤器配置为写类似于以下的writeWeakETag : W/"02a2d595e6ed9a0b24f027f2b63b134d6"(在RFC 7232章节2.3中定义)。
+
+为了支持异步请求，该过滤器必须与DispatcherType.ASYNC映射，以便过滤器能够延迟并成功生成到最后一个异步调度结束的ETag。如果使用Spring框架的AbstractAnnotationConfigDispatcherServletInitializer(参见Servlet配置)，所有的过滤器都会自动为所有分派类型注册。然而，如果通过web.xml或通过FilterRegistrationBean在Spring Boot中注册过滤器，请确保包含DispatcherType.ASYNC。
+
+### 1.2.4.cors
+
+Spring MVC通过控制器上的注解为CORS配置提供了细粒度的支持。然而，当与Spring Security一起使用时，我们建议依赖内置的CorsFilter，它必须在Spring Security的过滤器链之前订购。
+
+有关更多详细信息，请参阅CORS和CORS过滤器部分。
+
+## 1.3.注解控制器
+
+Spring MVC提供了一个基于注解的编程模型，其中@Controller和@RestController组件使用注解来表示请求映射、请求输入、异常处理等。带注解的控制器具有灵活的方法签名，不必扩展基类或实现特定的接口。下面的例子显示了一个由注解定义的控制器:
+
+```java
+@Controller
+public class HelloController {
+
+    @GetMapping("/hello")
+    public String handle(Model model) {
+        model.addAttribute("message", "Hello World!");
+        return "index";
+    }
+}
+```
+
+在前面的例子中，该方法接受Model并返回一个视图名作为String，但是还有许多其他选项，将在本章后面解释。
+
+> 说明
+>
+> 关于spring.io的指南和教程使用本节中描述的基于注释的编程模型。
+
+### 1.3.1. 声明
+
+您可以在Servlet的WebApplicationContext中使用标准Spring bean定义来定义控制器bean。@Controller构造型允许自动检测，与Spring对类路径中检测@Component类和为它们自动注册bean定义的一般保持一致。它还充当注释类的原型，表明它作为web组件的角色。
+
+要启用这种@Controller bean的自动检测，您可以在Java配置中添加组件扫描，如下面的示例所示:
+
+```java
+@Configuration
+@ComponentScan("org.example.web")
+public class WebConfig {
+
+    // ...
+}
+```
+
+下面的示例显示了与上一个示例相同的XML配置:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:p="http://www.springframework.org/schema/p"
+    xmlns:context="http://www.springframework.org/schema/context"
+    xsi:schemaLocation="
+        http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/context
+        https://www.springframework.org/schema/context/spring-context.xsd">
+
+    <context:component-scan base-package="org.example.web"/>
+
+    <!-- ... -->
+
+</beans>
+```
+
+@RestController是一个组合注释，它本身用@Controller和@ResponseBody进行元注释，以指示一个控制器，它的每个方法都继承类型级别的@ResponseBody注释，因此直接写入响应体，而不是使用HTML模板进行视图解析和呈现。
+
+#### AOP代理
+
+在某些情况下，您可能需要在运行时用AOP代理装饰控制器。一个例子是，如果您选择在控制器上直接使用@Transactional注释。在这种情况下，特别是对于控制器，我们建议使用基于类的代理。这通常是控制器的默认选择。然而，如果控制器必须实现一个不是Spring Context回调的接口(例如InitializingBean、*Aware和其他)，则可能需要显式配置基于类的代理。例如，使用<tx:annotation-driven>，您可以更改为<tx:annotation-driven proxy-target-class="true">，使用@EnableTransactionManagement，您可以更改为@EnableTransactionManagement(proxyTargetClass = true)。
+
+### 1.3.2. 请求映射
+
+可以使用@RequestMapping注释将请求映射到控制器方法。它具有各种属性，可以根据URL、HTTP方法、请求参数、报头和媒体类型进行匹配。您可以在类级别使用它来表示共享映射，也可以在方法级别使用它来缩小到特定端点映射。
+
+还有一些特定于HTTP方法的快捷方式变体@RequestMapping:
+
+- `@GetMapping`
+- `@PostMapping`
+- `@PutMapping`
+- `@DeleteMapping`
+- `@PatchMapping`
+
+提供快捷方式是Custom Annotations，因为大多数控制器方法应该映射到特定的HTTP方法，而不是使用@RequestMapping，默认情况下，它匹配所有HTTP方法。在类级别仍然需要@RequestMapping来表示共享映射。
+
+下面的例子有类型和方法级别的映射:
+
+```java
+@RestController
+@RequestMapping("/persons")
+class PersonController {
+
+    @GetMapping("/{id}")
+    public Person getPerson(@PathVariable Long id) {
+        // ...
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public void add(@RequestBody Person person) {
+        // ...
+    }
+}
+```
+
+#### URI模式
+
+@RequestMapping方法可以使用URL模式进行映射。有两种选择:
+
+- PathPattern—一个与URL路径匹配的预解析模式，也被预解析为PathContainer。该解决方案专为web使用，有效地处理编码和路径参数，并有效地匹配。
+- AntPathMatcher —根据字符串路径匹配字符串模式。这是Spring配置中用于选择类路径、文件系统和其他位置上的资源的原始解决方案。它的效率较低，字符串路径输入对于有效处理url的编码和其他问题是一个挑战。
+
+PathPattern是web应用程序的推荐解决方案，也是Spring WebFlux的唯一选择。在5.3版本之前，AntPathMatcher是Spring MVC中唯一的选择，并且一直是默认的。然而，PathPattern可以在MVC配置中启用。
+
+PathPattern支持与AntPathMatcher相同的模式语法。此外，它还支持捕获模式，例如{*spring}，用于在路径末尾匹配0个或多个路径段。PathPattern还限制使用**来匹配多个路径段，这样只允许在模式的末尾使用。这在为给定请求选择最佳匹配模式时消除了许多不明确的情况。完整的模式语法请参考PathPattern和AntPathMatcher。
+
+一些示例模式:
+
+- `"/resources/ima?e.png"` - 匹配路径段中的一个字符
+- `"/resources/*.png"` - 在路径段中匹配零个或多个字符
+- `"/resources/**"` - 匹配多个路径段
+- `"/projects/{project}/versions"` - 匹配一个路径段并将其捕获为一个变量
+- `"/projects/{project:[a-z]+}/versions"` - 用正则表达式匹配和捕获变量
+
+可以使用@PathVariable访问捕获的URI变量。例如:
+
+```java
+@GetMapping("/owners/{ownerId}/pets/{petId}")
+public Pet findPet(@PathVariable Long ownerId, @PathVariable Long petId) {
+    // ...
+}
+```
+
+你可以在类和方法级别声明URI变量，如下例所示:
+
+```java
+@Controller
+@RequestMapping("/owners/{ownerId}")
+public class OwnerController {
+
+    @GetMapping("/pets/{petId}")
+    public Pet findPet(@PathVariable Long ownerId, @PathVariable Long petId) {
+        // ...
+    }
+}
+```
+
+URI变量自动转换为适当的类型，或者引发TypeMismatchException。默认情况下支持简单类型(int、long、Date等)，您可以注册对任何其他数据类型的支持。参见类型转换和数据绑定器。
+
+您可以显式地命名URI变量(例如，@PathVariable("customId"))，但如果名称相同，并且您的代码是用调试信息或Java 8上的-parameters编译器标志编译的，则可以省略该细节。
+
+语法{varName:regex}用正则表达式声明一个URI变量，其语法为{varName:regex}。例如，给定URL "/spring-web-3.0.5.jar"，下面的方法提取名称、版本和文件扩展名:
+
+```java
+@GetMapping("/{name:[a-z-]+}-{version:\\d\\.\\d\\.\\d}{ext:\\.[a-z]+}")
+public void handle(@PathVariable String name, @PathVariable String version, @PathVariable String ext) {
+    // ...
+}
+```
+
+URI路径模式也可以有嵌入的${…}占位符，在启动时通过针对本地、系统、环境和其他属性源使用PropertySourcesPlaceholderConfigurer来解析这些占位符。例如，您可以使用它来根据一些外部配置参数化基本URL。
+
+#### 模式对比
+
+当多个模式匹配一个URL时，必须选择最佳匹配。这取决于是否启用parsed PathPattern的使用，可以通过以下方式之一完成:
+
+- [`PathPattern.SPECIFICITY_COMPARATOR`](https://docs.spring.io/spring-framework/docs/5.3.23/javadoc-api/org/springframework/web/util/pattern/PathPattern.html#SPECIFICITY_COMPARATOR)
+- [`AntPathMatcher.getPatternComparator(String path)`](https://docs.spring.io/spring-framework/docs/5.3.23/javadoc-api/org/springframework/util/AntPathMatcher.html#getPatternComparator-java.lang.String-)
+
+两者都有助于将更具体的模式排在最上面。如果一个模式具有较低的URI变量计数(计算为1)、单个通配符计数(计算为1)和双通配符计数(计算为2)，那么该模式就不那么特定。如果得分相等，则选择较长的模式。给定相同的分数和长度，将选择URI变量多于通配符的模式。
+
+默认映射模式(/\*\*)不计入评分，总是最后排序。此外，前缀模式(例如/public/\*\*)被认为不如没有双通配符的其他模式具体。
+
+有关详细信息，请参见上面的模式比较器链接。
+
+#### 后缀匹配
+
+从5.3开始，默认情况下Spring MVC不再执行.\*后缀模式匹配，其中映射到/person的控制器也隐式映射到/person.*。因此，路径扩展不再用于解释响应所请求的内容类型—例如/person.pdf、/person.xml等等。
+
+当浏览器用来发送难以一致解释的Accept头文件时，以这种方式使用文件扩展名是必要的。目前，这不再是必要的，使用Accept标头应该是首选。
+
+随着时间的推移，使用文件扩展名在许多方面都被证明存在问题。当与URI变量、路径参数和URI编码的使用重叠时，可能会导致歧义。推理基于url的授权和安全性(更多细节见下一节)也变得更加困难。
+
+要完全禁用5.3之前版本中路径扩展的使用，请设置以下内容:
+
+- `useSuffixPatternMatching(false)`, 参见 [PathMatchConfigurer](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-config-path-matching)
+- `favorPathExtension(false)`, 参见 [ContentNegotiationConfigurer](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-config-content-negotiation)
+
+有一种方法来请求内容类型，而不是通过“Accept”头仍然是有用的，例如在浏览器中输入URL时。替代路径扩展的一种安全方法是使用查询参数策略。如果必须使用文件扩展名，可以考虑通过ContentNegotiationConfigurer的mediaTypes属性将它们限制为显式注册的扩展名列表。
+
+#### 后缀匹配与RFD
 

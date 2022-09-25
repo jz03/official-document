@@ -716,3 +716,615 @@ URI路径模式也可以有嵌入的${…}占位符，在启动时通过针对�
 
 #### 后缀匹配与RFD
 
+反射文件下载(RFD)攻击类似于XSS，因为它依赖于响应中反映的请求输入(例如，查询参数和URI变量)。但是，RFD攻击不是将JavaScript插入到HTML中，而是依靠浏览器切换来执行下载，并在稍后双击时将响应作为可执行脚本处理。
+
+在Spring MVC中，@ResponseBody和ResponseEntity方法是有风险的，因为它们可以呈现不同的内容类型，客户机可以通过URL路径扩展请求这些内容类型。禁用后缀模式匹配和使用路径扩展进行内容协商可以降低风险，但不足以防止RFD攻击。
+
+为了防止RFD攻击，在呈现响应体之前，Spring MVC添加了Content-Disposition:inline;filename=f.txt头来建议固定和安全的下载文件。只有当URL路径包含一个既不安全也不显式注册用于内容协商的文件扩展名时，才会这样做。但是，当直接在浏览器中输入url时，可能会产生潜在的副作用。
+
+默认情况下，许多公共路径扩展是安全的。具有自定义HttpMessageConverter实现的应用程序可以显式地为内容协商注册文件扩展名，以避免为那些扩展添加content - disposition头。看到内容类型。
+
+参见CVE-2015-5211了解与RFD相关的其他建议。
+
+#### 消费者媒体类型
+
+您可以根据请求的Content-Type缩小请求映射，如下面的示例所示:
+
+```java
+@PostMapping(path = "/pets", consumes = "application/json") ①
+public void addPet(@RequestBody Pet pet) {
+    // ...
+}
+```
+
+①使用consumes属性按内容类型缩小映射。
+
+consumes属性还支持否定表达式——例如，!text/plain表示除了text/plain以外的任何内容类型。
+
+您可以在类级别声明共享consumes属性。然而，与大多数其他请求映射属性不同的是，当在类级别使用时，方法级别使用属性覆盖而不是扩展类级别声明。
+
+> 说明
+>
+> MediaType为常用的媒体类型提供常量，例如APPLICATION_JSON_VALUE和APPLICATION_XML_VALUE。
+
+#### 生产者媒体类型
+
+你可以根据Accept请求头和控制器方法生成的内容类型列表缩小请求映射，如下例所示:
+
+```java
+@GetMapping(path = "/pets/{petId}", produces = "application/json") ①
+@ResponseBody
+public Pet getPet(@PathVariable String petId) {
+    // ...
+}
+```
+
+①使用produces属性按内容类型缩小映射范围。
+
+produces属性还支持否定表达式——例如，!text/plain表示除了text/plain以外的任何内容类型。
+
+您可以在类级别声明共享produces属性。然而，与大多数其他请求映射属性不同的是，当在类级别使用时，方法级别使用属性覆盖而不是扩展类级别声明。
+
+#### 变量与头部
+
+可以根据请求参数条件缩小请求映射。您可以测试是否存在请求参数(myParam)，是否缺少请求参数(!myParam)，或者是否有特定的值(myParam=myValue)。下面的例子展示了如何测试一个特定的值:
+
+```java
+@GetMapping(path = "/pets/{petId}", params = "myParam=myValue") ①
+public void findPet(@PathVariable String petId) {
+    // ...
+}
+```
+
+①测试myParam是否等于myValue。
+
+你也可以使用同样的请求头条件，如下例所示:
+
+```java
+@GetMapping(path = "/pets", headers = "myHeader=myValue") ①
+public void findPet(@PathVariable String petId) {
+    // ...
+}
+```
+
+①测试myParam是否等于myValue。
+
+> 说明
+>
+> 您可以用header条件匹配Content-Type和Accept，但最好使用consumes和produces来代替。
+
+#### HTTP HEAD, OPTIONS
+
+@GetMapping(和@RequestMapping(method=HttpMethod.GET))对请求映射透明地支持HTTP HEAD。控制器方法不需要更改。一个响应包装器，应用于javax.servlet.http.HttpServlet，确保Content-Length头被设置为写入的字节数(不实际写入响应)。
+
+@GetMapping(和@RequestMapping(method=HttpMethod.GET))隐式映射到并支持HTTP HEAD。HTTP HEAD请求被当作HTTP GET处理，不同的是，不是写入主体，而是计算字节数并设置Content-Length头。
+
+默认情况下，HTTP OPTIONS是通过将允许响应头设置为所有具有匹配URL模式的@RequestMapping方法中列出的HTTP方法列表来处理的。
+
+对于没有HTTP方法声明的@RequestMapping, Allow头被设置为GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS。控制器方法应该始终声明支持的HTTP方法(例如，通过使用HTTP方法特定的变体:@GetMapping、@PostMapping和其他)。
+
+您可以显式地将@RequestMapping方法映射到HTTP HEAD和HTTP OPTIONS，但在一般情况下这是不必要的。
+
+#### 自定义注解
+
+Spring MVC支持使用组合注释进行请求映射。这些注释本身是用@RequestMapping进行元注释的，组合起来是为了重新声明@RequestMapping属性的一个子集(或全部)，具有更窄、更具体的用途。
+
+@GetMapping、@PostMapping、@PutMapping、@DeleteMapping和@PatchMapping是组合注释的例子。提供它们是因为大多数控制器方法应该映射到特定的HTTP方法，而不是使用@RequestMapping，默认情况下，它匹配所有HTTP方法。如果需要组合注释的示例，请查看这些注释是如何声明的。
+
+Spring MVC还支持使用自定义请求匹配逻辑的自定义请求映射属性。这是一个更高级的选项，它需要继承RequestMappingHandlerMapping并重写getCustomMethodCondition方法，在这个方法中您可以检查自定义属性并返回您自己的RequestCondition。
+
+#### 显式注册
+
+您可以以编程方式注册处理程序方法，您可以将其用于动态注册或高级情况，例如在不同的url下使用相同处理程序的不同实例。下面的例子注册了一个处理程序方法:
+
+```java
+@Configuration
+public class MyConfig {
+
+    @Autowired
+    public void setHandlerMapping(RequestMappingHandlerMapping mapping, UserHandler handler) ①
+            throws NoSuchMethodException {
+
+        RequestMappingInfo info = RequestMappingInfo
+                .paths("/user/{id}").methods(RequestMethod.GET).build(); ②
+
+        Method method = UserHandler.class.getMethod("getUser", Long.class); ③
+
+        mapping.registerMapping(info, handler, method); ④
+    }
+}
+```
+
+①为控制器注入目标处理程序和处理程序映射。
+
+②准备请求映射元数据。
+
+③获取handler方法。
+
+④添加注册。
+
+### 1.3.3.方法处理
+
+@RequestMapping方法处理具有灵活的签名，可以从支持的控制器方法参数和返回值中选择。
+
+#### 方法参数
+
+下表描述了支持的控制器方法参数。任何参数都不支持响应式类型。
+
+JDK 8的java.util.Optional被支持作为方法参数，与带有required属性的注释(例如，@RequestParam， @RequestHeader和其他)结合使用，相当于required=false。
+
+| 控制器方法参数                                               | 说明                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| WebRequest`, `NativeWebRequest                               | 对请求参数、请求和会话属性的通用访问，而不直接使用Servlet API。 |
+| javax.servlet.ServletRequest，javax.servlet.ServletResponse  | 选择任何特定的请求或响应类型——例如，ServletRequest, HttpServletRequest，或Spring的MultipartRequest, MultipartHttpServletRequest。 |
+| javax.servlet.http.HttpSession                               | 强制会话的存在。因此，这样的参数永远不会为空。注意，会话访问不是线程安全的。如果允许多个请求并发访问一个会话，可以考虑将RequestMappingHandlerAdapter实例的synchronizeOnSession标志设置为true。 |
+| javax.servlet.http.PushBuilder                               | 用于编程HTTP/2资源推送的Servlet 4.0推送构建器API。注意，根据Servlet规范，如果客户端不支持HTTP/2特性，则注入的PushBuilder实例可以为空。 |
+| java.security.Principal                                      | 当前经过身份验证的用户——如果知道，可能是特定的Principal实现类。<br/><br/>注意，如果这个参数被注释，以便自定义解析器在通过HttpServletRequest#getUserPrincipal退回到默认解析之前解析它，那么这个参数不会被急切地解析。例如，Spring安全认证实现了Principal，并将通过HttpServletRequest#getUserPrincipal进行注入，除非它还注释了@AuthenticationPrincipal，在这种情况下，它将由自定义的Spring安全解析器通过Authentication#getPrincipal进行解析。 |
+| HttpMethod                                                   | 请求的HTTP方法。                                             |
+| java.util.Locale                                             | 当前请求区域设置，由可用的最具体的LocaleResolver确定(实际上，配置的LocaleResolver或LocaleContextResolver)。 |
+| java.util.TimeZone` + `java.time.ZoneId                      | 与当前请求关联的时区，由LocaleContextResolver确定。          |
+| java.io.InputStream`, `java.io.Reader                        | 用于访问由Servlet API公开的原始请求体。                      |
+| java.io.OutputStream`, `java.io.Writer                       | 用于访问由Servlet API公开的原始请求体。                      |
+| @PathVariable                                                | 用于访问URI模板变量。参见URI模式。                           |
+| @MatrixVariable                                              | 用于访问URI路径段中的名称-值对。参见矩阵变量。               |
+| @RequestParam                                                | 用于访问Servlet请求参数，包括多部分文件。参数值被转换为声明的方法参数类型。参见@RequestParam和Multipart。<br/>注意，对于简单的参数值，使用@RequestParam是可选的。参见表格末尾的“任何其他参数”。 |
+| @RequestHeader                                               | 用于访问请求标头。头值被转换为声明的方法参数类型。参见@RequestHeader。 |
+| @CookieValue                                                 | 访问cookie。Cookies值被转换为声明的方法参数类型。参见@CookieValue。 |
+| @RequestBody                                                 | 用于访问HTTP请求体。主体内容通过使用HttpMessageConverter实现转换为声明的方法参数类型。参见@RequestBody。 |
+| HttpEntity<B>                                                | 用于访问请求头和请求体。主体使用HttpMessageConverter进行转换。参见HttpEntity。 |
+| @RequestPart                                                 | 为了访问多部分/表单数据请求中的部分，使用HttpMessageConverter转换部分的主体。参见Multipart。 |
+| java.util.Map，org.springframework.ui.Model，org.springframework.ui.ModelMap | 用于访问HTML控制器中使用的模型，并作为视图呈现的一部分公开给模板。 |
+| RedirectAttributes                                           | 指定在重定向的情况下使用的属性(即被附加到查询字符串中)，以及临时存储的flash属性，直到重定向后的请求。参见重定向属性和Flash属性。 |
+| @ModelAttribute                                              | 用于访问模型中已存在的属性(如果不存在则实例化)，并应用数据绑定和验证。参见@ModelAttribute以及Model和DataBinder。<br/>注意，使用@ModelAttribute是可选的(例如，设置其属性)。参见本表末尾的“任何其他参数”。 |
+| Errors`, `BindingResult                                      | 用于访问来自命令对象(即@ModelAttribute参数)的验证和数据绑定的错误，或来自@RequestBody或@RequestPart参数验证的错误。必须在经过验证的方法参数之后立即声明Errors或BindingResult参数。 |
+| SessionStatus` + class-level `@SessionAttributes             | 用于标记表单处理完成，这将触发清除通过类级别@SessionAttributes注释声明的会话属性。更多细节请参见@SessionAttributes。 |
+| UriComponentsBuilder                                         | 用于准备相对于当前请求的主机、端口、方案、上下文路径和servlet映射的文字部分的URL。更多细节请参见URI链接。 |
+| @SessionAttribute                                            | 对于任何会话属性的访问，与作为类级别@SessionAttributes声明的结果存储在会话中的模型属性相反。更多细节请参见@SessionAttribute。 |
+| @RequestAttribute                                            | 用于访问请求属性。详见@RequestAttribute。                    |
+| Any other argument                                           | 如果一个方法参数与该表中前面的任何值都不匹配，并且它是一个简单类型(由BeanUtils#isSimpleProperty确定)，则它将被解析为@RequestParam。否则，它将被解析为@ModelAttribute。 |
+
+#### 返回值
+
+下一个表描述了支持的控制器方法返回值。所有返回值都支持响应式类型。
+
+| 控制器方法返回值                                             | 描述                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| @ResponseBody                                                | 返回值通过HttpMessageConverter实现转换并写入响应。参见@ResponseBody。 |
+| HttpEntity<B>，ResponseEntity<B>                             | 指定完整响应(包括HTTP报头和正文)的返回值将通过HttpMessageConverter实现进行转换，并写入响应。参见ResponseEntity。 |
+| HttpHeaders                                                  | 用于返回带有头部而没有正文的响应。                           |
+| String                                                       | 用ViewResolver实现解析并与隐式模型一起使用的视图名称——通过命令对象和@ModelAttribute方法确定。处理程序方法还可以通过声明model参数(参见显式注册)以编程方式丰富模型。 |
+| View                                                         | 一个视图实例，用来与隐式模型一起渲染——通过命令对象和@ModelAttribute方法确定。处理程序方法还可以通过声明model参数(参见显式注册)以编程方式丰富模型。 |
+| java.util.Map，org.springframework.ui.Model                  | 属性要添加到隐式模型中，视图名称通过RequestToViewNameTranslator隐式确定。 |
+| @ModelAttribute                                              | 添加到模型中的属性，通过RequestToViewNameTranslator隐式确定视图名称。<br/>注意，@ModelAttribute是可选的。参见该表末尾的“任何其他返回值”。 |
+| `ModelAndView` object                                        | 要使用的视图和模型属性，以及可选的响应状态。                 |
+| void                                                         | 具有void返回类型(或空返回值)的方法如果还具有ServletResponse、OutputStream参数或@ResponseStatus注释，则被认为已经完全处理了响应。如果控制器已经做了一个正的ETag或lastModified时间戳检查，也会发生同样的情况(详见控制器)。<br/>如果以上都不为真，void返回类型也可以为REST控制器指示“无响应体”，或为HTML控制器指示默认视图名称选择。 |
+| DeferredResult<V>                                            | 从任何线程异步地产生上述任何返回值—例如，作为某个事件或回调的结果。参见异步请求和DeferredResult。 |
+| Callable<V>                                                  | 在Spring mvc管理的线程中异步生成上述任何返回值。请参见异步请求和可调用。 |
+| ListenableFuture<V>，java.util.concurrent.CompletionStage<V>，java.util.concurrent.CompletableFuture<V> | 作为一种方便(例如，当底层服务返回其中之一时)，可以替代DeferredResult。 |
+| ResponseBodyEmitter，SseEmitter                              | 发出异步的对象流，用HttpMessageConverter实现将其写入响应。也支持作为ResponseEntity的主体。请参见异步请求和HTTP流。 |
+| StreamingResponseBody                                        | 异步写入响应OutputStream。也支持作为ResponseEntity的主体。请参见异步请求和HTTP流。 |
+| Reactive types — Reactor，RxJava，<br> or others through `ReactiveAdapterRegistry` | 可替代DeferredResult与多值流(例如，Flux, Observable)收集到一个列表。<br/>对于流场景(例如，文本/事件流，应用程序/json+流)，使用SseEmitter和ResponseBodyEmitter来代替，其中ServletOutputStream阻塞I/O在Spring mvc管理的线程上执行，并对每次写操作的完成施加反压力。请参见异步请求和响应式类型。 |
+| Any other return value                                       | 任何不匹配该表中任何前面值的返回值，即String或void将被视为视图名(通过RequestToViewNameTranslator使用默认的视图名选择)，前提是它不是简单类型，由BeanUtils#isSimpleProperty确定。简单类型的值仍然无法解析。 |
+
+#### 类型转换
+
+一些表示基于字符串的请求输入的带注释的控制器方法参数(如@RequestParam、@RequestHeader、@PathVariable、@MatrixVariable和@CookieValue)如果参数声明为String以外的内容，则可能需要类型转换。
+
+对于这种情况，将根据配置的转换器自动应用类型转换。默认情况下，支持简单类型(int、long、Date和其他类型)。您可以通过WebDataBinder(参见DataBinder)或通过向FormattingConversionService注册格式化器来定制类型转换。参见Spring字段格式化。
+
+类型转换中的一个实际问题是空String源值的处理。如果此类值由于类型转换而变为空，则被视为缺失。Long、UUID和其他目标类型可以是这种情况。如果希望允许注入null，可以在参数注释上使用所需的标志，或者将参数声明为@Nullable。
+
+> 扩展信息
+>
+> 从5.3开始，即使在类型转换之后，也会强制使用非空参数。如果你的处理方法也打算接受空值，要么声明你的参数为@Nullable，要么在相应的@RequestParam等注释中标记为required=false。这是一个最佳实践，也是针对5.3升级中遇到的问题的推荐解决方案。
+>
+> 或者，你可以专门处理例如，在需要@PathVariable的情况下产生的MissingPathVariableException。转换后的空值将被视为空的原始值，因此相应的Missing…Exception变量将被抛出。
+
+#### 矩阵变量
+
+RFC 3986讨论了路径段中的名称-值对。在Spring MVC中，根据Tim Berners-Lee的一篇“老文章”，我们将这些称为“矩阵变量”，但它们也可以被称为URI路径参数。
+
+矩阵变量可以出现在任何路径段中，每个变量用分号分隔，多个值用逗号分隔(例如，/cars;color=red,green;year=2012)。还可以通过重复的变量名指定多个值(例如，color=red;color=green;color=blue)。
+
+如果希望URL包含矩阵变量，则控制器方法的请求映射必须使用URI变量来屏蔽变量内容，并确保请求能够成功匹配，而不受矩阵变量顺序和存在性的影响。下面的例子使用了一个矩阵变量:
+
+```java
+// GET /pets/42;q=11;r=22
+
+@GetMapping("/pets/{petId}")
+public void findPet(@PathVariable String petId, @MatrixVariable int q) {
+
+    // petId == 42
+    // q == 11
+}
+```
+
+考虑到所有路径段都可能包含矩阵变量，您有时可能需要澄清矩阵变量应该在哪个路径变量中。下面的例子展示了如何做到这一点:
+
+```java
+// GET /owners/42;q=11/pets/21;q=22
+
+@GetMapping("/owners/{ownerId}/pets/{petId}")
+public void findPet(
+        @MatrixVariable(name="q", pathVar="ownerId") int q1,
+        @MatrixVariable(name="q", pathVar="petId") int q2) {
+
+    // q1 == 11
+    // q2 == 22
+}
+```
+
+矩阵变量可以定义为可选的，并指定默认值，如下例所示:
+
+```java
+// GET /pets/42
+
+@GetMapping("/pets/{petId}")
+public void findPet(@MatrixVariable(required=false, defaultValue="1") int q) {
+
+    // q == 1
+}
+```
+
+要获取所有矩阵变量，你可以使用MultiValueMap，如下例所示:
+
+```java
+// GET /owners/42;q=11;r=12/pets/21;q=22;s=23
+
+@GetMapping("/owners/{ownerId}/pets/{petId}")
+public void findPet(
+        @MatrixVariable MultiValueMap<String, String> matrixVars,
+        @MatrixVariable(pathVar="petId") MultiValueMap<String, String> petMatrixVars) {
+
+    // matrixVars: ["q" : [11,22], "r" : 12, "s" : 23]
+    // petMatrixVars: ["q" : 22, "s" : 23]
+}
+```
+
+注意，您需要启用矩阵变量的使用。在MVC Java配置中，你需要通过路径匹配设置一个带有removeSemicolonContent=false的UrlPathHelper。在MVC XML命名空间中，你可以设置< MVC:annotation-driven enable-matrix-variables="true"/>。
+
+#### `@RequestParam`
+
+您可以使用@RequestParam注释将Servlet请求参数(即查询参数或表单数据)绑定到控制器中的方法参数。
+
+下面的例子展示了如何做到这一点:
+
+```java
+@Controller
+@RequestMapping("/pets")
+public class EditPetForm {
+
+    // ...
+
+    @GetMapping
+    public String setupForm(@RequestParam("petId") int petId, Model model) { ①
+        Pet pet = this.clinic.loadPet(petId);
+        model.addAttribute("pet", pet);
+        return "petForm";
+    }
+
+    // ...
+
+}
+```
+
+①使用@RequestParam绑定petId。
+
+默认情况下，使用该注释的方法参数是必需的，但是您可以通过将@RequestParam注释的required标志设置为false或使用java.util.Optional包装器声明实参来指定方法参数是可选的。
+
+如果目标方法参数类型不是String，则自动应用类型转换。参见类型转换。
+
+将实参类型声明为数组或列表允许为相同的形参名解析多个形参值。
+
+当@RequestParam注释声明为Map<string, string="">或MultiValueMap<string, string="">，且没有在注释中指定参数名时，则用每个给定参数名的请求参数值填充映射。</string,></string,>
+
+注意，使用@RequestParam是可选的(例如，设置其属性)。默认情况下，任何简单值类型的参数(由BeanUtils#isSimpleProperty决定)并且没有被任何其他参数解析器解析的参数，都被视为使用@RequestParam注释的。
+
+#### `@RequestHeader`
+
+可以使用@RequestHeader注释将请求头绑定到控制器中的方法参数。
+
+考虑以下带头的请求:
+
+```
+Host                    localhost:8080
+Accept                  text/html,application/xhtml+xml,application/xml;q=0.9
+Accept-Language         fr,en-gb;q=0.7,en;q=0.3
+Accept-Encoding         gzip,deflate
+Accept-Charset          ISO-8859-1,utf-8;q=0.7,*;q=0.7
+Keep-Alive              300
+```
+
+下面的示例获取Accept-Encoding和Keep-Alive报头的值:
+
+```java
+@GetMapping("/demo")
+public void handle(
+        @RequestHeader("Accept-Encoding") String encoding, ①
+        @RequestHeader("Keep-Alive") long keepAlive) { ②
+    //...
+}
+```
+
+①获取Accept-Encoding头的值。
+
+②获取Keep-Alive头的值。
+
+如果目标方法参数类型不是String，则自动应用类型转换。参见类型转换。
+
+当在Map<String, String>`, `MultiValueMap<String, String>`或者 `HttpHeaders参数上使用@RequestHeader注释时，映射将用所有的头值填充。
+
+> 说明
+>
+> 内置支持将逗号分隔的字符串转换为数组、字符串集合或类型转换系统已知的其他类型。例如，一个带有@RequestHeader("Accept")注释的方法参数可以是String类型，也可以是String[]或List<string>。
+
+#### `@CookieValue`
+
+可以使用@CookieValue注释将HTTP cookie的值绑定到控制器中的方法参数。
+
+考虑一个带有以下cookie的请求:
+
+```
+JSESSIONID=415A4AC178C59DACE0B2C9CA727CDD84
+```
+
+下面的例子展示了如何获取cookie值:
+
+```java
+@GetMapping("/demo")
+public void handle(@CookieValue("JSESSIONID") String cookie) { ①
+    //...
+}
+```
+
+①获取JSESSIONID cookie的值。
+
+如果参数不是string类型，将会自动进行类型转换。参见类型转换。
+
+#### `@ModelAttribute`
+
+您可以在方法参数上使用@ModelAttribute注释来从模型中访问属性，或者在属性不存在时实例化它。模型属性还覆盖了来自HTTP Servlet请求参数的值，这些参数的名称与字段名匹配。这被称为数据绑定，它使您不必处理解析和转换单个查询参数和表单字段。下面的例子展示了如何做到这一点:
+
+```java
+@PostMapping("/owners/{ownerId}/pets/{petId}/edit")
+public String processSubmit(@ModelAttribute Pet pet) {
+    // method logic...
+}
+```
+
+Pet实例是以下几种方式之一实现的：
+
+- 从可能通过@ModelAttribute方法添加它的模型中检索。
+- 如果模型属性列在类级别的@SessionAttributes注释中，则从HTTP会话检索。
+- 通过Converter获得，其中模型属性名称与请求值的名称相匹配，例如路径变量或请求参数(参见下一个示例)。
+- 使用其默认构造函数实例化。
+- 通过带有与Servlet请求参数匹配的参数的“主构造函数”实例化。参数名是通过JavaBeans @ConstructorProperties或字节码中运行时保留的参数名确定的。
+
+除了使用@ModelAttribute方法来提供它或依赖框架来创建模型属性之外，另一种选择是使用Converter<string, T>来提供实例。当模型属性名称与请求值(如路径变量或请求参数)的名称相匹配，并且存在从String到模型属性类型的Converter时，就会应用此方法。在下面的例子中，模型属性名称是account，它匹配URI路径变量account，并且有一个注册的Converter<string, Account>，它可以从数据存储加载account:
+
+```java
+@PutMapping("/accounts/{account}")
+public String save(@ModelAttribute("account") Account account) {
+    // ...
+}
+```
+
+获得模型属性实例后，应用数据绑定。WebDataBinder类将Servlet请求参数名(查询参数和表单字段)与目标对象上的字段名匹配。在需要时，在应用类型转换后填充匹配字段。有关数据绑定(和验证)的更多信息，请参见验证。有关自定义数据绑定的更多信息，请参见DataBinder。
+
+数据绑定可能会导致错误。默认情况下，会引发BindException异常。然而，要在控制器方法中检查此类错误，您可以在@ModelAttribute旁边立即添加一个BindingResult参数，如下例所示:
+
+```java
+@PostMapping("/owners/{ownerId}/pets/{petId}/edit")
+public String processSubmit(@ModelAttribute("pet") Pet pet, BindingResult result) { ①
+    if (result.hasErrors()) {
+        return "petForm";
+    }
+    // ...
+}
+```
+
+①@ModelAttribute注解后边添加了一个BindingResult
+
+在某些情况下，您可能希望在没有数据绑定的情况下访问模型属性。对于这种情况，您可以将Model注入到控制器中并直接访问它，或者，设置@ModelAttribute(binding=false)，如下例所示:
+
+```java
+@ModelAttribute
+public AccountForm setUpForm() {
+    return new AccountForm();
+}
+
+@ModelAttribute
+public Account findAccount(@PathVariable String accountId) {
+    return accountRepository.findOne(accountId);
+}
+
+@PostMapping("update")
+public String update(@Valid AccountForm form, BindingResult result,
+        @ModelAttribute(binding=false) Account account) { ①
+    // ...
+}
+```
+
+①设置@ModelAttribute(binding=false)
+
+通过添加javax.validation.Valid注释或Spring的@Validated注释(Bean验证和Spring验证)，您可以在数据绑定之后自动应用验证。下面的例子展示了如何做到这一点:
+
+```java
+@PostMapping("/owners/{ownerId}/pets/{petId}/edit")
+public String processSubmit(@Valid @ModelAttribute("pet") Pet pet, BindingResult result) { ①
+    if (result.hasErrors()) {
+        return "petForm";
+    }
+    // ...
+}
+```
+
+①检验pet实例
+
+注意，使用@ModelAttribute是可选的(例如，设置其属性)。默认情况下，任何不是简单值类型的参数(由BeanUtils#isSimpleProperty确定)并且没有被任何其他参数解析器解析的参数都被视为使用@ModelAttribute注释的。
+
+#### `@SessionAttributes`
+
+#### `@SessionAttribute`
+
+#### `@RequestAttribute`
+
+####  重定向属性
+
+#### Flash属性
+
+#### Multipart
+
+#### `@RequestBody`
+
+您可以使用@RequestBody注释通过HttpMessageConverter读取请求主体并将其反序列化为对象。下面的例子使用了@RequestBody参数:
+
+```java
+@PostMapping("/accounts")
+public void handle(@RequestBody Account account) {
+    // ...
+}
+```
+
+您可以使用MVC配置的消息转换器选项来配置或自定义消息转换。
+
+您可以将@RequestBody与javax.validation.Valid或Spring的@Validated注释结合使用，这两者都会导致应用标准Bean验证。默认情况下，验证错误会导致methodargumentnotvalideexception，该异常被转换为400 (BAD_REQUEST)响应。或者，你可以通过errors或BindingResult参数在控制器内部本地处理验证错误，如下例所示:
+
+```java
+@PostMapping("/accounts")
+public void handle(@Valid @RequestBody Account account, BindingResult result) {
+    // ...
+}
+```
+
+#### HttpEntity
+
+HttpEntity或多或少与使用@RequestBody相同，但它基于一个公开请求头和请求体的容器对象。下面的清单显示了一个示例:
+
+```java
+@PostMapping("/accounts")
+public void handle(HttpEntity<Account> entity) {
+    // ...
+}
+```
+
+#### `@ResponseBody`
+
+您可以在方法上使用@ResponseBody注释，通过HttpMessageConverter将返回序列化到响应体。下面的清单显示了一个示例:
+
+```java
+@GetMapping("/accounts/{id}")
+@ResponseBody
+public Account handle() {
+    // ...
+}
+```
+
+在类级别上也支持@ResponseBody，在这种情况下，它被所有控制器方法继承。这就是@RestController的效果，它不过是一个用@Controller和@ResponseBody标记的元注释。
+
+您可以将@ResponseBody与响应类型一起使用。有关详细信息，请参阅异步请求和响应式类型。
+
+您可以使用MVC配置的消息转换器选项来配置或自定义消息转换。
+
+可以将@ResponseBody方法与JSON序列化视图组合在一起。详细信息请参见Jackson JSON。
+
+#### ResponseEntity
+
+ResponseEntity类似于@ResponseBody，但带有状态和头文件。例如:
+
+```java
+@GetMapping("/something")
+public ResponseEntity<String> handle() {
+    String body = ... ;
+    String etag = ... ;
+    return ResponseEntity.ok().eTag(etag).body(body);
+}
+```
+
+Spring MVC支持使用单值响应类型异步生成ResponseEntity，以及/或主体的单值和多值响应类型。这允许以下类型的异步响应:
+
+- ResponseEntity<Mono<T>> or ResponseEntity<Flux<T>> 使响应状态和标头立即可知，而主体稍后将异步提供。如果主体包含0..1个值或Flux(如果它可以产生多个值)。
+- Mono<ResponseEntity<T>> 提供所有这三种功能——响应状态、报头和正文，稍后将异步提供。这允许响应状态和报头根据异步请求处理的结果而变化。
+
+#### Jackson JSON
+
+Spring提供对Jackson JSON库的支持。
+
+**JSON Views**
+
+Spring MVC为Jackson的序列化视图提供了内置支持，它只允许呈现对象中所有字段的一个子集。要将它与@ResponseBody或ResponseEntity控制器方法一起使用，您可以使用Jackson的@JsonView注释来激活序列化视图类，如下面的示例所示:
+
+```java
+@RestController
+public class UserController {
+
+    @GetMapping("/user")
+    @JsonView(User.WithoutPasswordView.class)
+    public User getUser() {
+        return new User("eric", "7!jd#h23");
+    }
+}
+
+public class User {
+
+    public interface WithoutPasswordView {};
+    public interface WithPasswordView extends WithoutPasswordView {};
+
+    private String username;
+    private String password;
+
+    public User() {
+    }
+
+    public User(String username, String password) {
+        this.username = username;
+        this.password = password;
+    }
+
+    @JsonView(WithoutPasswordView.class)
+    public String getUsername() {
+        return this.username;
+    }
+
+    @JsonView(WithPasswordView.class)
+    public String getPassword() {
+        return this.password;
+    }
+}
+```
+
+> @JsonView允许一个视图类数组，但是每个控制器方法只能指定一个。如果需要激活多个视图，可以使用复合接口。
+
+如果你想以编程的方式完成上述操作，而不是声明一个@JsonView注释，用MappingJacksonValue包装返回值并使用它来提供序列化视图:
+
+```java
+@RestController
+public class UserController {
+
+    @GetMapping("/user")
+    public MappingJacksonValue getUser() {
+        User user = new User("eric", "7!jd#h23");
+        MappingJacksonValue value = new MappingJacksonValue(user);
+        value.setSerializationView(User.WithoutPasswordView.class);
+        return value;
+    }
+}
+```
+
+对于依赖于视图解析的控制器，可以将序列化视图类添加到模型中，如下例所示:
+
+```java
+@Controller
+public class UserController extends AbstractController {
+
+    @GetMapping("/user")
+    public String getUser(Model model) {
+        model.addAttribute("user", new User("eric", "7!jd#h23"));
+        model.addAttribute(JsonView.class.getName(), User.WithoutPasswordView.class);
+        return "userView";
+    }
+}
+```
+
+
+

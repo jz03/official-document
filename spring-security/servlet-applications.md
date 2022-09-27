@@ -250,6 +250,99 @@ AbstractAuthenticationProcessingFilter 用作验证用户凭据的基本过滤�
 
 接下来，AbstractAuthenticationProcessingFilter 可以对提交给它的任何身份验证请求进行身份验证。
 
+# Authorization 系统架构
+
+## Authorities
+
+Authentication，讨论所有 Authentication 实现如何存储 GrantedAuthority 对象列表。 这些代表已授予委托人的权限。 GrantedAuthority 对象由 AuthenticationManager 插入到 Authentication 对象中，稍后在做出授权决定时由 AuthorizationManager 读取。
+
+此方法允许 AuthorizationManagers 获得 GrantedAuthority 的精确字符串表示。 通过将表示作为字符串返回，GrantedAuthority 可以被大多数 AuthorizationManager 和 AccessDecisionManager 轻松“读取”。 如果 GrantedAuthority 不能精确地表示为字符串，则 GrantedAuthority 被认为是“复杂的”并且 getAuthority() 必须返回 null。
+
+“复杂”GrantedAuthority 的一个示例是存储适用于不同客户帐号的操作和权限阈值列表的实现。 将这个复杂的 GrantedAuthority 表示为 String 会非常困难，因此 getAuthority() 方法应该返回 null。 这将向任何 AuthorizationManager 表明它需要专门支持 GrantedAuthority 实现才能理解其内容。
+
+Spring Security 包括一个具体的 GrantedAuthority 实现，SimpleGrantedAuthority。 这允许将任何用户指定的字符串转换为 GrantedAuthority。 安全架构中包含的所有 AuthenticationProviders 都使用 SimpleGrantedAuthority 来填充 Authentication 对象。
+
+##  预调用处理
+
+Spring Security 提供拦截器来控制对安全对象的访问，例如方法调用或 Web 请求。 AccessDecisionManager 会做出关于是否允许继续进行调用的预调用决定。
+
+### AuthorizationManager
+
+AuthorizationManager 取代了 AccessDecisionManager 和 AccessDecisionVoter。
+
+鼓励自定义 AccessDecisionManager 或 AccessDecisionVoter 的应用程序，更改为使用 AuthorizationManager。
+
+AuthorizationManagers 由 AuthorizationFilter 调用，负责做出最终的访问控制决策。 AuthorizationManager 接口包含两个方法：
+
+AuthorizationManager 的 check 方法传递了它需要的所有相关信息，以便做出授权决定。 特别是，传递安全对象可以检查包含在实际安全对象调用中的那些参数。 例如，假设安全对象是 MethodInvocation。 在 MethodInvocation 中查询任何 Customer 参数是很容易的，然后在 AuthorizationManager 中实现某种安全逻辑以确保允许主体对那个客户进行操作。 如果访问被授予，实现应该返回一个正的 AuthorizationDecision，如果访问被拒绝，则返回负的 AuthorizationDecision，并且在放弃做出决定时返回一个空的 AuthorizationDecision。
+
+verify 调用 check 并随后在 AuthorizationDecision 为负的情况下引发 AccessDeniedException。
+
+### 基于委托的 AuthorizationManager 实现
+
+虽然用户可以实现自己的 AuthorizationManager 来控制授权的所有方面，但 Spring Security 附带了一个委托 AuthorizationManager，它可以与各个 AuthorizationManager 协作。
+
+RequestMatcherDelegatingAuthorizationManager 会将请求与最合适的委托 AuthorizationManager 匹配。 对于方法安全，您可以使用 AuthorizationManagerBeforeMethodInterceptor 和 AuthorizationManagerAfterMethodInterceptor。
+
+授权管理器实现说明了相关的类。
+
+#### AuthorityAuthorizationManager
+
+Spring Security 提供的最常见的 AuthorizationManager 是 AuthorityAuthorizationManager。 它配置有一组给定的权限以在当前身份验证中查找。 如果 Authentication 包含任何配置的权限，它将返回肯定的 AuthorizationDecision。 否则它将返回一个否定的 AuthorizationDecision。
+
+
+#### AuthenticatedAuthorizationManager
+
+另一个管理器是 AuthenticatedAuthorizationManager。 它可用于区分匿名、完全认证和记住我认证的用户。 许多站点在记住我的身份验证下允许某些有限的访问，但要求用户通过登录来确认其身份以获得完全访问权限。
+
+
+#### 自定义授权管理器
+
+显然，您还可以实现自定义 AuthorizationManager，并且您可以在其中放入几乎任何您想要的访问控制逻辑。 它可能特定于您的应用程序（与业务逻辑相关），或者它可能实现一些安全管理逻辑。 例如，您可以创建一个可以查询 Open Policy Agent 或您自己的授权数据库的实现。
+
+> 说明
+您将在 Spring 网站上找到一篇博客文章，其中描述了如何使用旧的 AccessDecisionVoter 实时拒绝帐户已被暂停的用户的访问。 您可以通过实现 AuthorizationManager 来实现相同的结果。
+
+## 适配 AccessDecisionManager 和 AccessDecisionVoters
+
+在 AuthorizationManager 之前，Spring Security 发布了 AccessDecisionManager 和 AccessDecisionVoter。
+在某些情况下，例如迁移旧应用程序，可能需要引入一个调用 AccessDecisionManager 或 AccessDecisionVoter 的 AuthorizationManager。
+
+## 角色分层
+
+应用程序中的特定角色应自动“包含”其他角色是一项常见要求。 例如，在具有“管理员”和“用户”角色概念的应用程序中，您可能希望管理员能够执行普通用户可以执行的所有操作。 为此，您可以确保所有管理员用户也都被分配了“用户”角色。 或者，您可以修改要求“用户”角色还包括“管理员”角色的每个访问约束。 如果您的应用程序中有很多不同的角色，这可能会变得相当复杂。
+
+角色层次结构的使用允许您配置哪些角色（或权限）应包括其他角色。 Spring Security 的 RoleVoter 的扩展版本 RoleHierarchyVoter 配置了 RoleHierarchy，从中获取分配给用户的所有“可访问权限”。 典型的配置可能如下所示：
+
+这里我们在层次结构中有四个角色 ROLE_ADMIN ⇒ ROLE_STAFF ⇒ ROLE_USER ⇒ ROLE_GUEST。 使用 ROLE_ADMIN 进行身份验证的用户在针对适用于调用上述 RoleHierarchyVoter 的 AuthorizationManager 评估安全约束时，将表现得好像他们拥有所有四个角色一样。 > 符号可以被认为是“包含”的意思。
+
+角色层次结构提供了一种方便的方法来简化应用程序的访问控制配置数据和/或减少需要分配给用户的权限数量。 对于更复杂的需求，您可能希望在应用程序所需的特定访问权限和分配给用户的角色之间定义逻辑映射，在加载用户信息时在两者之间进行转换。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

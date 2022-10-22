@@ -3652,6 +3652,166 @@ spring-context-indexer工件生成一个包含在jar文件中的META-INF/spring.
 
 ## 1.11. 使用JSR 330标准注解
 
+从Spring 3.0开始，Spring提供了对JSR-330标准注释(依赖注入)的支持。这些注释以与Spring注释相同的方式扫描。要使用它们，您需要在类路径中有相关的jar。
+
+> 补充信息
+>
+> 如果使用maven，可以通过如下方式引入`javax.inject`构件到pom文件中。
+>
+> ```xml
+> <dependency>
+>     <groupId>javax.inject</groupId>
+>     <artifactId>javax.inject</artifactId>
+>     <version>1</version>
+> </dependency>
+> ```
+
+### 1.11.1. 使用@Inject和@Named注解进行依赖注入
+
+可以使用`@javax.inject.Inject`注解来替代@Autowired注解，如下所示：
+
+```java
+import javax.inject.Inject;
+
+public class SimpleMovieLister {
+
+    private MovieFinder movieFinder;
+
+    @Inject
+    public void setMovieFinder(MovieFinder movieFinder) {
+        this.movieFinder = movieFinder;
+    }
+
+    public void listMovies() {
+        this.movieFinder.findMovies(...);
+        // ...
+    }
+}
+```
+
+和@Autowired一样，可以在字段级、方法级和构造函数参数级使用@Inject。此外，您可以将注入点声明为提供者，允许按需访问范围较短的bean或通过Provider.get()调用延迟访问其他bean。下面的例子是上一个例子的变体:
+
+```java
+import javax.inject.Inject;
+import javax.inject.Provider;
+
+public class SimpleMovieLister {
+
+    private Provider<MovieFinder> movieFinder;
+
+    @Inject
+    public void setMovieFinder(Provider<MovieFinder> movieFinder) {
+        this.movieFinder = movieFinder;
+    }
+
+    public void listMovies() {
+        this.movieFinder.get().findMovies(...);
+        // ...
+    }
+}
+```
+
+如果你想为要注入的依赖项使用限定名，你应该使用@Named注释，如下面的例子所示:
+
+```java
+import javax.inject.Inject;
+import javax.inject.Named;
+
+public class SimpleMovieLister {
+
+    private MovieFinder movieFinder;
+
+    @Inject
+    public void setMovieFinder(@Named("main") MovieFinder movieFinder) {
+        this.movieFinder = movieFinder;
+    }
+
+    // ...
+}
+```
+
+与@Autowired一样，@Inject也可以与java.util.Optional或@Nullable一起使用。这在这里更适用，因为@Inject没有必需的属性。下面的两个例子展示了如何使用@Inject和@Nullable:
+
+```java
+public class SimpleMovieLister {
+
+    @Inject
+    public void setMovieFinder(Optional<MovieFinder> movieFinder) {
+        // ...
+    }
+}
+```
+
+```java
+public class SimpleMovieLister {
+
+    @Inject
+    public void setMovieFinder(@Nullable MovieFinder movieFinder) {
+        // ...
+    }
+}
+```
+
+### 1.11.2. `@Named`与`@ManagedBean`：与`@Component`注解相同
+
+使用`@Named`或`@ManagedBean`可以替换`@Component`注解，如下所示：
+
+```java
+import javax.inject.Inject;
+import javax.inject.Named;
+
+@Named("movieListener")  // @ManagedBean("movieListener") could be used as well
+public class SimpleMovieLister {
+
+    private MovieFinder movieFinder;
+
+    @Inject
+    public void setMovieFinder(MovieFinder movieFinder) {
+        this.movieFinder = movieFinder;
+    }
+
+    // ...
+}
+```
+
+使用@Component而不为组件指定名称是很常见的。@Named也可以以类似的方式使用，如下例所示:
+
+```java
+import javax.inject.Inject;
+import javax.inject.Named;
+
+@Named
+public class SimpleMovieLister {
+
+    private MovieFinder movieFinder;
+
+    @Inject
+    public void setMovieFinder(MovieFinder movieFinder) {
+        this.movieFinder = movieFinder;
+    }
+
+    // ...
+}
+```
+
+当您使用@Named或@ManagedBean时，您可以使用与使用Spring注释完全相同的方式使用组件扫描，如下面的示例所示:
+
+```java
+@Configuration
+@ComponentScan(basePackages = "org.example")
+public class AppConfig  {
+    // ...
+}
+```
+
+> 补充信息
+>
+> 与@Component相比，JSR-330 @Named和JSR-250 @ManagedBean注释是不可组合的。您应该使用Spring的原型模型来构建自定义组件注释。
+
+
+
+
+
 
 
 

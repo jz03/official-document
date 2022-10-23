@@ -4257,15 +4257,169 @@ public class AppConfig {
 }
 ```
 
+### 1.12.4. 使用`@Configuration`注解
 
+@Configuration是一个类级注释，指示对象是bean定义的源。@Configuration类通过@ bean注释的方法声明bean。对@Configuration类上的@Bean方法的调用也可以用来定义bean间的依赖关系。有关基础概念的介绍，请参阅:@Bean和@Configuration。
 
+#### 注入 inter-bean 依赖
 
+当bean之间存在依赖关系时，表达这种依赖关系就像让一个bean方法调用另一个bean方法一样简单，如下面的示例所示:
 
+```java
+@Configuration
+public class AppConfig {
 
+    @Bean
+    public BeanOne beanOne() {
+        return new BeanOne(beanTwo());
+    }
 
+    @Bean
+    public BeanTwo beanTwo() {
+        return new BeanTwo();
+    }
+}
+```
 
+在前面的示例中，beanOne通过构造函数注入接收到对beanTwo的引用。
 
+> 补充信息
+>
+> 这种声明bean之间依赖关系的方法只有在@Configuration类中声明@Bean方法时才有效。您不能通过使用普通的@Component类来声明bean间的依赖关系。
 
+#### Lookup方法注入
+
+如前所述，查找方法注入是一种高级特性，应该很少使用。当单个作用域的bean依赖于原型作用域的bean时，它非常有用。使用Java进行这种类型的配置为实现这种模式提供了一种自然的方法。下面的例子展示了如何使用查找方法注入:
+
+```java
+public abstract class CommandManager {
+    public Object process(Object commandState) {
+        // grab a new instance of the appropriate Command interface
+        Command command = createCommand();
+        // set the state on the (hopefully brand new) Command instance
+        command.setState(commandState);
+        return command.execute();
+    }
+
+    // okay... but where is the implementation of this method?
+    protected abstract Command createCommand();
+}
+```
+
+通过使用Java配置，您可以创建CommandManager的一个子类，其中抽象的createCommand()方法以查找新的(原型)命令对象的方式被重写。下面的例子展示了如何做到这一点:
+
+```java
+@Bean
+@Scope("prototype")
+public AsyncCommand asyncCommand() {
+    AsyncCommand command = new AsyncCommand();
+    // inject dependencies here as required
+    return command;
+}
+
+@Bean
+public CommandManager commandManager() {
+    // return new anonymous implementation of CommandManager with createCommand()
+    // overridden to return a new prototype Command object
+    return new CommandManager() {
+        protected Command createCommand() {
+            return asyncCommand();
+        }
+    }
+}
+```
+
+#### 关于基于java的配置如何在内部工作的进一步信息
+
+思考下面的例子，它显示了一个@Bean注释的方法被调用了两次:
+
+```java
+// 两次调用同一个方法，产生的对象是同一个。cglib进行了中间代理。
+//如果没有cglib的代理，将会产生两个不同的对象。
+@Configuration
+public class AppConfig {
+
+    @Bean
+    public ClientService clientService1() {
+        ClientServiceImpl clientService = new ClientServiceImpl();
+        clientService.setClientDao(clientDao());
+        return clientService;
+    }
+
+    @Bean
+    public ClientService clientService2() {
+        ClientServiceImpl clientService = new ClientServiceImpl();
+        clientService.setClientDao(clientDao());
+        return clientService;
+    }
+
+    @Bean
+    public ClientDao clientDao() {
+        return new ClientDaoImpl();
+    }
+}
+```
+
+clientDao()在clientService1()和clientService2()中分别被调用了一次。由于该方法创建ClientDaoImpl的一个新实例并返回它，所以您通常期望有两个实例(每个服务一个)。这肯定会有问题:在Spring中，实例化的bean默认有一个单例作用域。这就是神奇的地方:所有的@Configuration类都在启动时用CGLIB进行子类化。在子类中，在调用父方法并创建新实例之前，子方法首先检查容器中是否有任何缓存的(限定作用域的)bean。
+
+> 补充信息
+>
+> 根据bean的范围，行为可能不同。我们在这里谈论的是单例。
+
+> 在Spring 3.2中，不再需要将CGLIB添加到你的类路径中，因为CGLIB类已经被重新打包到org.springframework.cglib下，并直接包含在Spring -core JAR中。
+
+> 说明
+>
+> 由于CGLIB在启动时动态添加特性，因此有一些限制。特别是，配置类不能是final。然而，从4.3开始，配置类上允许使用任何构造函数，包括使用@Autowired或用于默认注入的单个非默认构造函数声明。
+>
+> 如果您希望避免任何cglib强加的限制，可以考虑在non-@Configuration类上声明@Bean方法(例如，在普通的@Component类上声明)。@Bean方法之间的跨方法调用不会被拦截，因此您必须在构造函数或方法级别上专门依赖依赖注入。
+
+### 1.12.5. 编写基于java的配置
+
+Spring基于java的配置特性允许您编写注释，这可以降低配置的复杂性。
+
+#### 使用@`Import` 注解
+
+就像在Spring XML文件中使用import元素来帮助模块化配置一样，@Import注释允许从另一个配置类加载@Bean定义，如下面的示例所示:
+
+```java
+@Configuration
+public class ConfigA {
+
+    @Bean
+    public A a() {
+        return new A();
+    }
+}
+
+@Configuration
+@Import(ConfigA.class)
+public class ConfigB {
+
+    @Bean
+    public B b() {
+        return new B();
+    }
+}
+```
+
+现在，在实例化上下文时不需要同时指定ConfigA.class和ConfigB.class，只需要显式提供ConfigB，如下例所示:
+
+```java
+public static void main(String[] args) {
+    ApplicationContext ctx = new AnnotationConfigApplicationContext(ConfigB.class);
+
+    // now both beans A and B will be available...
+    A a = ctx.getBean(A.class);
+    B b = ctx.getBean(B.class);
+}
+```
+
+这种方法简化了容器实例化，因为只需要处理一个类，而不需要在构造过程中记住可能大量的@Configuration类。
+
+> 说明
+>
+> 在Spring Framework 4.2中，@Import也支持对常规组件类的引用，类似于AnnotationConfigApplicationContext.register方法。如果您想要避免组件扫描，通过使用一些配置类作为入口点显式定义所有组件，这尤其有用。
 
 
 

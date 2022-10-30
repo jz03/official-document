@@ -4421,69 +4421,1282 @@ public static void main(String[] args) {
 >
 > 在Spring Framework 4.2中，@Import也支持对常规组件类的引用，类似于AnnotationConfigApplicationContext.register方法。如果您想要避免组件扫描，通过使用一些配置类作为入口点显式定义所有组件，这尤其有用。
 
+##### 在导入的@Bean定义上注入依赖项
 
+前面的示例可以工作，但过于简单。在大多数实际场景中，bean之间存在跨配置类的依赖关系。当使用XML时，这不是问题，因为不涉及编译器，并且您可以声明ref="someBean"，并相信Spring会在容器初始化期间解决它。当使用@Configuration类时，Java编译器会对配置模型施加约束，因为对其他bean的引用必须是有效的Java语法。
 
+幸运的是，解决这个问题很简单。正如我们已经讨论过的，@Bean方法可以有任意数量的参数来描述bean依赖关系。考虑以下包含几个@Configuration类的更真实的场景，每个类都取决于在其他类中声明的bean:
 
+```java
+@Configuration
+public class ServiceConfig {
 
+    @Bean
+    public TransferService transferService(AccountRepository accountRepository) {
+        return new TransferServiceImpl(accountRepository);
+    }
+}
 
+@Configuration
+public class RepositoryConfig {
 
+    @Bean
+    public AccountRepository accountRepository(DataSource dataSource) {
+        return new JdbcAccountRepository(dataSource);
+    }
+}
 
+@Configuration
+@Import({ServiceConfig.class, RepositoryConfig.class})
+public class SystemTestConfig {
 
+    @Bean
+    public DataSource dataSource() {
+        // return new DataSource
+    }
+}
 
+public static void main(String[] args) {
+    ApplicationContext ctx = new AnnotationConfigApplicationContext(SystemTestConfig.class);
+    // everything wires up across configuration classes...
+    TransferService transferService = ctx.getBean(TransferService.class);
+    transferService.transfer(100.00, "A123", "C456");
+}
+```
 
+还有一种方法可以达到同样的效果。请记住，@Configuration类最终只是容器中的另一个bean:这意味着它们可以像任何其他bean一样利用@Autowired和@Value 注入以及其他特性。
 
+> 注意
+>
+> 确保您以这种方式注入的依赖项只是最简单的类型。@Configuration类在上下文初始化过程中很早就被处理了，以这种方式强制注入依赖可能会导致意外的早期初始化。尽可能使用基于参数的注入，如前面的示例所示。
+>
+> 另外，要特别注意通过@Bean定义BeanPostProcessor和BeanFactoryPostProcessor。这些方法通常应该声明为静态@Bean方法，而不是触发包含它们的配置类的实例化。否则，@Autowired和@Value可能无法在配置类本身上工作，因为可以在AutowiredAnnotationBeanPostProcessor之前将其创建为bean实例。
 
+下面的例子展示了如何将一个bean自动连接到另一个bean:
 
+```java
+@Configuration
+public class ServiceConfig {
 
+    @Autowired
+    private AccountRepository accountRepository;
 
+    @Bean
+    public TransferService transferService() {
+        return new TransferServiceImpl(accountRepository);
+    }
+}
 
+@Configuration
+public class RepositoryConfig {
 
+    private final DataSource dataSource;
 
+    public RepositoryConfig(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
 
+    @Bean
+    public AccountRepository accountRepository() {
+        return new JdbcAccountRepository(dataSource);
+    }
+}
 
+@Configuration
+@Import({ServiceConfig.class, RepositoryConfig.class})
+public class SystemTestConfig {
 
+    @Bean
+    public DataSource dataSource() {
+        // return new DataSource
+    }
+}
 
+public static void main(String[] args) {
+    ApplicationContext ctx = new AnnotationConfigApplicationContext(SystemTestConfig.class);
+    // everything wires up across configuration classes...
+    TransferService transferService = ctx.getBean(TransferService.class);
+    transferService.transfer(100.00, "A123", "C456");
+}
+```
 
+> 说明
+>
+> @Configuration类中的构造函数注入只在Spring Framework 4.3中被支持。还要注意，如果目标bean只定义了一个构造函数，则不需要指定@Autowired。
 
+##### 完全合格的导入bean，便于导航
 
+在前面的场景中，使用@Autowired工作良好，并提供了所需的模块化，但是确定自动连接bean定义的确切声明位置仍然有些模糊。例如，作为查看ServiceConfig的开发人员，您如何确切地知道@Autowired AccountRepository bean是在哪里声明的?它在代码中不是显式的，这可能就可以了。记住，用于Eclipse的Spring Tools提供的工具可以呈现显示一切如何连接的图表，这可能就是您所需要的全部。而且，您的Java IDE可以轻松地找到AccountRepository类型的所有声明和使用，并快速地向您显示返回该类型的@Bean方法的位置。
 
+如果这种歧义是不可接受的，并且您希望在IDE中从一个@Configuration类直接导航到另一个@Configuration类，那么可以考虑自动装配配置类本身。下面的例子展示了如何做到这一点:
 
+```java
+@Configuration
+public class ServiceConfig {
 
+    @Autowired
+    private RepositoryConfig repositoryConfig;
 
+    @Bean
+    public TransferService transferService() {
+        // navigate 'through' the config class to the @Bean method!
+        return new TransferServiceImpl(repositoryConfig.accountRepository());
+    }
+}
+```
 
+在前面的情况中，定义AccountRepository的位置是完全显式的。但是，ServiceConfig现在与RepositoryConfig紧密耦合。这就是权衡。通过使用基于接口或基于抽象类的@Configuration类，可以在一定程度上缓解这种紧密耦合。考虑下面的例子:
 
+```java
+@Configuration
+public class ServiceConfig {
 
+    @Autowired
+    private RepositoryConfig repositoryConfig;
 
+    @Bean
+    public TransferService transferService() {
+        return new TransferServiceImpl(repositoryConfig.accountRepository());
+    }
+}
 
+@Configuration
+public interface RepositoryConfig {
 
+    @Bean
+    AccountRepository accountRepository();
+}
 
+@Configuration
+public class DefaultRepositoryConfig implements RepositoryConfig {
 
+    @Bean
+    public AccountRepository accountRepository() {
+        return new JdbcAccountRepository(...);
+    }
+}
 
+@Configuration
+@Import({ServiceConfig.class, DefaultRepositoryConfig.class})  // import the concrete config!
+public class SystemTestConfig {
 
+    @Bean
+    public DataSource dataSource() {
+        // return DataSource
+    }
 
+}
 
+public static void main(String[] args) {
+    ApplicationContext ctx = new AnnotationConfigApplicationContext(SystemTestConfig.class);
+    TransferService transferService = ctx.getBean(TransferService.class);
+    transferService.transfer(100.00, "A123", "C456");
+}
+```
 
+现在ServiceConfig与具体的DefaultRepositoryConfig松散耦合，内置的IDE工具仍然很有用:您可以很容易地获得RepositoryConfig实现的类型层次结构。通过这种方式，导航@Configuration类及其依赖项与导航基于接口的代码的通常过程没有什么不同。
 
+> 说明
+>
+> 如果您想要影响某些bean的启动创建顺序，可以考虑将其中一些bean声明为@Lazy(用于在第一次访问时而不是在启动时创建)或@DependsOn(确保在当前bean之前创建特定的其他bean，而不考虑后者的直接依赖关系)。
 
+#### 有条件地包含@Configuration类或@Bean方法
 
+根据某些任意的系统状态，有条件地启用或禁用一个完整的@Configuration类甚至个别的@Bean方法通常是有用的。一个常见的例子是，只有在Spring环境中启用了特定的概要文件时，才使用@Profile注释来激活Bean(详细信息请参阅Bean定义概要文件)。
 
+@Profile注释实际上是通过使用一个更灵活的注释@Conditional实现的。@Conditional注释指示了在注册@Bean之前应该咨询的特定的org.springframework.context.annotation.Condition实现。
 
+Condition接口的实现提供了一个matches(…)方法，该方法返回true或false。例如，下面的清单显示了@Profile使用的实际条件实现:
 
+```java
+@Override
+public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
+    // Read the @Profile annotation attributes
+    MultiValueMap<String, Object> attrs = metadata.getAllAnnotationAttributes(Profile.class.getName());
+    if (attrs != null) {
+        for (Object value : attrs.get("value")) {
+            if (context.getEnvironment().acceptsProfiles(((String[]) value))) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return true;
+}
+```
 
+#### 结合Java和XML配置
 
+Spring的@Configuration类支持并不打算100%完全取代Spring XML。一些工具，如Spring XML名称空间，仍然是配置容器的理想方式。在XML方便或必要的情况下，您有一个选择:用“以XML为中心”的方式实例化容器，例如使用ClassPathXmlApplicationContext，或者用“以java为中心”的方式实例化它，使用AnnotationConfigApplicationContext和@ImportResource注释，根据需要导入XML。
 
+##### 以xml为中心使用**@Configuration**注解的类
 
+最好是从XML引导Spring容器，并以一种特殊的方式包含@Configuration类。例如，在使用Spring XML的大型现有代码库中，更容易根据需要创建@Configuration类，并从现有XML文件中包含它们。在本节的后面，我们将介绍在这种“以xml为中心”的情况下使用@Configuration类的情况。
 
+*将@Configuration类声明为普通Spring bean元素*
 
+记住，@Configuration类最终是容器中的bean定义。在本系列示例中，我们创建了一个名为AppConfig的@Configuration类，并将其作为bean定义包含在system-test-config.xml中。因为' context:annotation-config '被打开了，容器识别@Configuration注释并正确地处理AppConfig中声明的@Bean方法。
 
+下面的例子展示了Java中的一个普通配置类:
 
+```java
+@Configuration
+public class AppConfig {
 
+    @Autowired
+    private DataSource dataSource;
 
+    @Bean
+    public AccountRepository accountRepository() {
+        return new JdbcAccountRepository(dataSource);
+    }
 
+    @Bean
+    public TransferService transferService() {
+        return new TransferService(accountRepository());
+    }
+}
+```
 
+下面的示例显示了system-test-config.xml示例文件的一部分:
 
+```xml
+<beans>
+    <!-- enable processing of annotations such as @Autowired and @Configuration -->
+    <context:annotation-config/>
+    <context:property-placeholder location="classpath:/com/acme/jdbc.properties"/>
 
+    <bean class="com.acme.AppConfig"/>
 
+    <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="url" value="${jdbc.url}"/>
+        <property name="username" value="${jdbc.username}"/>
+        <property name="password" value="${jdbc.password}"/>
+    </bean>
+</beans>
+```
+
+下边展示了可能存在的 jdbc.properties配置文件：
+
+```properties
+jdbc.url=jdbc:hsqldb:hsql://localhost/xdb
+jdbc.username=sa
+jdbc.password=
+```
+
+```java
+public static void main(String[] args) {
+    ApplicationContext ctx = new ClassPathXmlApplicationContext("classpath:/com/acme/system-test-config.xml");
+    TransferService transferService = ctx.getBean(TransferService.class);
+    // ...
+}
+```
+
+> 补充信息
+>
+> 在system-test-config.xml文件中，AppConfig bean不声明id元素。虽然这样做是可以接受的，但这是不必要的，因为没有其他bean引用它，而且不太可能根据名称显式地从容器中获取它。类似地，DataSource bean只按类型自动连接，因此并不严格要求显式的bean id。
+
+*用**<context:component-scan/>**组件获取@Configuration的配置类*
+
+因为@Configuration是用@Component进行元注释的，所以@Configuration注释类自动成为组件扫描的候选者。使用与前面示例中描述的相同的场景，我们可以重新定义system-test-config.xml，以利用组件扫描。注意，在这种情况下，我们不需要显式地声明' context:annotation-config '，因为' context:component-scan '启用了相同的功能。
+
+修改后的system-test-config.xml文件示例如下:
+
+```xml
+<beans>
+    <!-- picks up and registers AppConfig as a bean definition -->
+    <context:component-scan base-package="com.acme"/>
+    <context:property-placeholder location="classpath:/com/acme/jdbc.properties"/>
+
+    <bean class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="url" value="${jdbc.url}"/>
+        <property name="username" value="${jdbc.username}"/>
+        <property name="password" value="${jdbc.password}"/>
+    </bean>
+</beans>
+```
+
+##### 以**@Configuration**类为核心使用**@ImportResource**来引用xml配置
+
+在@Configuration类是配置容器的主要机制的应用程序中，仍然可能至少需要使用一些XML。在这些场景中，您可以使用@ImportResource并只定义所需的XML。这样做可以实现一种“以java为中心”的方法来配置容器，并将XML保持在最低限度。下面的示例(包括一个配置类、一个定义bean的XML文件、一个属性文件和主类)展示了如何使用@ImportResource注释来实现“以java为中心”的配置，并根据需要使用XML:
+
+```java
+@Configuration
+@ImportResource("classpath:/com/acme/properties-config.xml")
+public class AppConfig {
+
+    @Value("${jdbc.url}")
+    private String url;
+
+    @Value("${jdbc.username}")
+    private String username;
+
+    @Value("${jdbc.password}")
+    private String password;
+
+    @Bean
+    public DataSource dataSource() {
+        return new DriverManagerDataSource(url, username, password);
+    }
+}
+```
+
+```xml
+properties-config.xml
+<beans>
+    <context:property-placeholder location="classpath:/com/acme/jdbc.properties"/>
+</beans>
+```
+
+```properties
+jdbc.properties
+jdbc.url=jdbc:hsqldb:hsql://localhost/xdb
+jdbc.username=sa
+jdbc.password=
+```
+
+```java
+public static void main(String[] args) {
+    ApplicationContext ctx = new AnnotationConfigApplicationContext(AppConfig.class);
+    TransferService transferService = ctx.getBean(TransferService.class);
+    // ...
+}
+```
+
+## 1.13. 环境抽象
+
+Environment接口是一个集成在容器中的抽象，它对应用程序环境的两个关键方面建模:概要文件和属性。
+
+概要文件是一个命名的、逻辑的bean定义组，仅当给定的概要文件是活动的时才向容器注册。可以将bean分配给配置文件，无论是用XML定义的还是用注释定义的。与概要文件相关的Environment对象的作用是确定哪些概要文件(如果有的话)当前是活动的，以及哪些概要文件(如果有的话)在默认情况下应该是活动的。
+
+属性在几乎所有应用程序中都扮演着重要的角色，并且可能来自各种来源:属性文件、JVM系统属性、系统环境变量、JNDI、servlet上下文参数、特殊的Properties对象、Map对象等等。与属性相关的Environment对象的作用是为用户提供一个方便的服务接口，用于配置属性源并从中解析属性。
+
+### 1.13.1. bean定义的概要文件（Profiles）
+
+Bean定义概要文件在核心容器中提供了一种机制，允许在不同环境中注册不同的Bean。“环境”这个词对不同的用户有不同的含义，这个功能可以帮助解决很多用例，包括:
+
+- 在开发中使用内存中的数据源，而在QA或生产中从JNDI中查找相同的数据源。
+
+- 只有在将应用程序部署到性能环境时才注册监视基础设施。
+
+- 为客户A和客户B部署注册定制的bean实现。
+
+考虑一个需要DataSource的实际应用程序中的第一个用例。在测试环境中，配置可能类似于以下:
+
+```java
+@Bean
+public DataSource dataSource() {
+    return new EmbeddedDatabaseBuilder()
+        .setType(EmbeddedDatabaseType.HSQL)
+        .addScript("my-schema.sql")
+        .addScript("my-test-data.sql")
+        .build();
+}
+```
+
+现在考虑如何将该应用程序部署到QA或生产环境中，假设应用程序的数据源已注册到生产应用程序服务器的JNDI目录中。我们的dataSource bean现在看起来像下面的清单:
+
+```java
+@Bean(destroyMethod="")
+public DataSource dataSource() throws Exception {
+    Context ctx = new InitialContext();
+    return (DataSource) ctx.lookup("java:comp/env/jdbc/datasource");
+}
+```
+
+问题是如何根据当前环境在使用这两种变体之间切换。随着时间的推移，Spring用户设计了许多方法来实现这一点，通常依赖于系统环境变量和包含${placeholder}令牌的XML“import”语句的组合，该语句根据环境变量的值解析为正确的配置文件路径。Bean定义概要文件是为这个问题提供解决方案的核心容器特性。
+
+如果我们推广前面特定于环境的bean定义示例中所示的用例，我们最终需要在某些上下文中注册某些bean定义，而在其他上下文中不注册。可以说，您希望在情况a中注册bean定义的某个概要文件，在情况b中注册不同的概要文件。我们首先更新配置以反映这种需求。
+
+#### 使用`@Profile`
+
+@Profile注释允许您在一个或多个指定的概要文件处于活动状态时指示组件有资格注册。使用前面的例子，我们可以像下面这样重写dataSource配置:
+
+```java
+@Configuration
+@Profile("development")
+public class StandaloneDataConfig {
+
+    @Bean
+    public DataSource dataSource() {
+        return new EmbeddedDatabaseBuilder()
+            .setType(EmbeddedDatabaseType.HSQL)
+            .addScript("classpath:com/bank/config/sql/schema.sql")
+            .addScript("classpath:com/bank/config/sql/test-data.sql")
+            .build();
+    }
+}
+```
+
+```java
+@Configuration
+@Profile("production")
+public class JndiDataConfig {
+
+    @Bean(destroyMethod="")
+    public DataSource dataSource() throws Exception {
+        Context ctx = new InitialContext();
+        return (DataSource) ctx.lookup("java:comp/env/jdbc/datasource");
+    }
+}
+```
+
+> 补充信息
+>
+> 正如前面提到的，对于@Bean方法，您通常选择使用编程的JNDI查找，通过使用Spring的JndiTemplate/JndiLocatorDelegate帮助程序或前面显示的直接JNDI InitialContext用法，而不是使用JndiObjectFactoryBean变量，这将迫使您将返回类型声明为FactoryBean类型。
+
+概要字符串可以包含一个简单的概要名称(例如，production)或一个概要表达式。概要表达式允许表达更复杂的概要逻辑(例如，production & us-east)。在配置文件表达式中支持以下操作符:
+
+- :配置文件的逻辑“不”
+
+- &:配置文件的逻辑“和”
+
+- |:概要文件的逻辑“或”
+
+> 补充信息
+>
+> 如果不使用括号，就不能混合使用&和|操作符。例如，production & us-east | eu-central不是一个有效的表达。它必须表示为production &(us-east | eu-central)。
+
+为了创建自定义组合注释，可以使用@Profile作为元注释。下面的例子定义了一个自定义的@Production注释，你可以用它替换@Profile("production"):
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Profile("production")
+public @interface Production {
+}
+```
+
+> 说明
+>
+> 如果一个@Configuration类用@Profile标记，那么所有与这个类关联的@Bean方法和@Import注释都将被绕过，除非一个或多个指定的概要文件是活动的。如果一个@Component或@Configuration类被标记为@Profile({"p1"， "p2"})，这个类不会被注册或处理，除非配置文件'p1'或'p2'已经被激活。如果给定的概要文件以NOT操作符(!)为前缀，则只有在概要文件未激活时才会注册带注释的元素。例如，给定@Profile({"p1"， "!p2"})，如果概要文件'p1'是活动的，或者概要文件'p2'不是活动的，那么就会发生注册。
+
+@Profile也可以在方法级别声明，以只包含配置类的一个特定bean(例如，特定bean的可选变体)，如下例所示:
+
+```java
+@Configuration
+public class AppConfig {
+
+    @Bean("dataSource")
+    @Profile("development") 
+    public DataSource standaloneDataSource() {
+        return new EmbeddedDatabaseBuilder()
+            .setType(EmbeddedDatabaseType.HSQL)
+            .addScript("classpath:com/bank/config/sql/schema.sql")
+            .addScript("classpath:com/bank/config/sql/test-data.sql")
+            .build();
+    }
+
+    @Bean("dataSource")
+    @Profile("production") 
+    public DataSource jndiDataSource() throws Exception {
+        Context ctx = new InitialContext();
+        return (DataSource) ctx.lookup("java:comp/env/jdbc/datasource");
+    }
+}
+```
+
+> 补充信息
+>
+> 在@Bean方法上使用@Profile，可能会应用一个特殊的场景:在具有相同Java方法名的重载@Bean方法的情况下(类似于构造函数重载)，需要在所有重载方法上一致地声明@Profile条件。如果条件不一致，则重载方法中只有第一个声明上的条件有意义。因此，@Profile不能用于选择具有特定参数签名的重载方法。同一bean的所有工厂方法之间的解析在创建时遵循Spring的构造函数解析算法。
+>
+> 如果您想定义具有不同概要文件条件的替代bean，可以使用不同的Java方法名，通过使用@Bean name属性指向相同的bean名，如前面的示例所示。如果参数签名都是相同的(例如，所有变量都有无参数的工厂方法)，那么这是首先在有效Java类中表示这种安排的唯一方法(因为一个特定名称和参数签名只能有一个方法)。
+
+#### xml配置bean的概要文件
+
+XML对应的是beans元素的概要文件属性。我们前面的示例配置可以在两个XML文件中重写，如下所示:
+
+```xml
+<beans profile="development"
+    xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:jdbc="http://www.springframework.org/schema/jdbc"
+    xsi:schemaLocation="...">
+
+    <jdbc:embedded-database id="dataSource">
+        <jdbc:script location="classpath:com/bank/config/sql/schema.sql"/>
+        <jdbc:script location="classpath:com/bank/config/sql/test-data.sql"/>
+    </jdbc:embedded-database>
+</beans>
+```
+
+```xml
+<beans profile="production"
+    xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:jee="http://www.springframework.org/schema/jee"
+    xsi:schemaLocation="...">
+
+    <jee:jndi-lookup id="dataSource" jndi-name="java:comp/env/jdbc/datasource"/>
+</beans>
+```
+
+也可以避免在同一个文件中拆分和嵌套bean元素，如下例所示:
+
+```xml
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:jdbc="http://www.springframework.org/schema/jdbc"
+    xmlns:jee="http://www.springframework.org/schema/jee"
+    xsi:schemaLocation="...">
+
+    <!-- other bean definitions -->
+
+    <beans profile="development">
+        <jdbc:embedded-database id="dataSource">
+            <jdbc:script location="classpath:com/bank/config/sql/schema.sql"/>
+            <jdbc:script location="classpath:com/bank/config/sql/test-data.sql"/>
+        </jdbc:embedded-database>
+    </beans>
+
+    <beans profile="production">
+        <jee:jndi-lookup id="dataSource" jndi-name="java:comp/env/jdbc/datasource"/>
+    </beans>
+</beans>
+```
+
+`spring bean.Xsd `已经被限制为只允许文件中的最后一个元素。这应该有助于提供灵活性，而不会在XML文件中造成混乱。
+
+> 补充信息
+>
+> XML对应程序不支持前面描述的概要文件表达式。但是，可以通过使用!操作符。也可以通过嵌套配置文件来应用逻辑上的“and”，如下例所示:
+>
+> ```xml
+> <beans xmlns="http://www.springframework.org/schema/beans"
+>     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+>     xmlns:jdbc="http://www.springframework.org/schema/jdbc"
+>     xmlns:jee="http://www.springframework.org/schema/jee"
+>     xsi:schemaLocation="...">
+> 
+>     <!-- other bean definitions -->
+> 
+>     <beans profile="production">
+>         <beans profile="us-east">
+>             <jee:jndi-lookup id="dataSource" jndi-name="java:comp/env/jdbc/datasource"/>
+>         </beans>
+>     </beans>
+> </beans>
+> ```
+>
+> 在前面的示例中，如果生产和us-east概要文件都是活动的，那么dataSource bean就会公开。
+
+#### 激活一个概要文件
+
+现在我们已经更新了我们的配置，我们仍然需要告诉Spring哪个概要文件是活动的。如果我们现在启动示例应用程序，我们将看到抛出NoSuchBeanDefinitionException，因为容器找不到名为dataSource的Spring bean。
+
+激活概要文件可以通过几种方式完成，但最直接的方法是通过通过ApplicationContext可用的环境API以编程方式完成。下面的例子展示了如何做到这一点:
+
+```java
+AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext();
+ctx.getEnvironment().setActiveProfiles("development");
+ctx.register(SomeConfig.class, StandaloneDataConfig.class, JndiDataConfig.class);
+ctx.refresh();
+```
+
+此外，您还可以通过spring.profiles.active属性声明式地激活概要文件，该属性可以通过系统环境变量、JVM系统属性、web.xml中的servlet上下文参数指定，甚至可以作为JNDI中的一个条目指定(参见PropertySource抽象)。在集成测试中，可以通过使用spring-test模块中的@ActiveProfiles注释来声明活动概要文件(请参阅环境概要文件的上下文配置)。
+
+注意，概要文件不是一个非此即彼的命题。您可以同时激活多个配置文件。通过编程，您可以向setActiveProfiles()方法提供多个配置文件名称，该方法接受String…下面的示例激活多个配置文件:
+
+```java
+ctx.getEnvironment().setActiveProfiles("profile1", "profile2");
+```
+
+声明性地说，spring.profiles.active可以接受一个以逗号分隔的配置文件名称列表，如下例所示:
+
+```properties
+    -Dspring.profiles.active="profile1,profile2"
+```
+
+#### 默认概要配置文件
+
+默认配置文件表示默认启用的配置文件。考虑下面的例子:
+
+```java
+@Configuration
+@Profile("default")
+public class DefaultDataConfig {
+
+    @Bean
+    public DataSource dataSource() {
+        return new EmbeddedDatabaseBuilder()
+            .setType(EmbeddedDatabaseType.HSQL)
+            .addScript("classpath:com/bank/config/sql/schema.sql")
+            .build();
+    }
+}
+```
+
+如果没有活动的概要文件，则创建dataSource。您可以将此视为为一个或多个bean提供默认定义的方法。如果启用了任何配置文件，则不应用默认配置文件。
+
+您可以通过在环境上使用setDefaultProfiles()来更改默认概要文件的名称，或者通过使用spring.profiles.default属性来声明。
+
+### 1.13.2.`PropertySource` 抽象
+
+Spring的Environment抽象在可配置的属性源层次结构上提供搜索操作。考虑以下清单:
+
+```java
+ApplicationContext ctx = new GenericApplicationContext();
+Environment env = ctx.getEnvironment();
+boolean containsMyProperty = env.containsProperty("my-property");
+System.out.println("Does my environment contain the 'my-property' property? " + containsMyProperty);
+```
+
+在前面的代码片段中，我们看到了询问Spring my-property属性是否为当前环境定义的高级方法。要回答这个问题，Environment对象对一组PropertySource对象执行搜索。PropertySource是任何键-值对源的简单抽象，Spring的StandardEnvironment配置了两个PropertySource对象——一个表示JVM系统属性集(system . getproperties())，另一个表示系统环境变量集(system .getenv())。
+
+> 补充信息
+>
+> 这些默认的属性源提供给StandardEnvironment，以便在独立的应用程序中使用。StandardServletEnvironment中填充了额外的默认属性源，包括servlet配置、servlet上下文参数和JndiPropertySource(如果JNDI可用的话)。
+
+具体地说，当您使用StandardEnvironment时，如果my-property系统属性或my-property环境变量在运行时存在，则调用env.containsProperty("my-property")将返回true。
+
+> 说明
+>
+> 执行的搜索是分层的。默认情况下，系统属性优先于环境变量。因此，如果my-property属性碰巧在调用env.getProperty("my-property")期间在这两个地方都设置了，则系统属性值“胜出”并返回。注意，属性值不会被合并，而是被前面的条目完全覆盖。
+>
+> 对于一个通用的StandardServletEnvironment，完整的层次结构如下所示，优先级最高的条目位于顶部:
+>
+> - ServletConfig参数(如果适用——例如，DispatcherServlet上下文)
+>
+> - ServletContext参数(web.xml上下文参数条目)
+>
+> - JNDI环境变量(java:comp/env/ entries)
+>
+> - JVM系统属性(-D命令行参数)
+>
+> - JVM系统环境(操作系统环境变量)
+
+最重要的是，整个机制是可配置的。也许您有一个想要集成到此搜索中的自定义属性源。为此，实现并实例化您自己的PropertySource，并将其添加到当前环境的PropertySource集合中。下面的例子展示了如何做到这一点:
+
+```java
+ConfigurableApplicationContext ctx = new GenericApplicationContext();
+MutablePropertySources sources = ctx.getEnvironment().getPropertySources();
+sources.addFirst(new MyPropertySource());
+```
+
+在前面的代码中，在搜索中以最高优先级添加了MyPropertySource。如果它包含一个my-property属性，则检测并返回该属性，有利于任何其他propertsource中的任何my-property属性。MutablePropertySources API公开了许多允许对属性源集进行精确操作的方法。
+
+### 1.13.3. 使用`@PropertySource`注解
+
+@PropertySource注释为向Spring的环境中添加PropertySource提供了一种方便的声明性机制。
+
+给定一个名为app.properties的文件，其中包含键值对testbean.name=myTestBean，下面的@Configuration类使用@PropertySource的方式是调用testBean.getName()返回myTestBean:
+
+```java
+@Configuration
+@PropertySource("classpath:/com/myco/app.properties")
+public class AppConfig {
+
+    @Autowired
+    Environment env;
+
+    @Bean
+    public TestBean testBean() {
+        TestBean testBean = new TestBean();
+        testBean.setName(env.getProperty("testbean.name"));
+        return testBean;
+    }
+}
+```
+
+@PropertySource资源位置中的任何${…}占位符都将根据已经在环境中注册的属性源集进行解析，如下面的示例所示:
+
+```java
+@Configuration
+@PropertySource("classpath:/com/${my.placeholder:default/path}/app.properties")
+public class AppConfig {
+
+    @Autowired
+    Environment env;
+
+    @Bean
+    public TestBean testBean() {
+        TestBean testBean = new TestBean();
+        testBean.setName(env.getProperty("testbean.name"));
+        return testBean;
+    }
+}
+```
+
+假设`my.placeholder`出现在已经注册的属性源中(例如，系统属性或环境变量)，占位符将解析为相应的值。如果不是，则使用default/path作为默认值。如果没有指定默认值且属性无法解析，则抛出IllegalArgumentException异常。
+
+> 补充信息
+>
+> 根据Java 8约定，@PropertySource注释是可重复的。但是，所有这样的@PropertySource注释都需要在同一层声明，要么直接在配置类上声明，要么作为同一自定义注释中的元注释声明。不建议混合使用直接注释和元注释，因为直接注释有效地覆盖了元注释。
+
+### 1.13.4. 语句中的占位符解析
+
+过去，元素中的占位符的值只能根据JVM系统属性或环境变量进行解析。现在情况已经不同了。因为环境抽象集成在整个容器中，所以很容易通过它来路由占位符的解析。这意味着您可以以任何喜欢的方式配置解析过程。您可以更改搜索系统属性和环境变量的优先级，或者完全删除它们。您还可以根据需要将自己的属性源添加到混合中。
+
+具体来说，下面的语句不管客户属性是在哪里定义的，只要它在Environment中可用就可以工作:
+
+```xml
+<beans>
+    <import resource="com/bank/service/${customer}-config.xml"/>
+</beans>
+```
+
+## 1.14. 注册一个LoadTimeWeaver
+
+当类加载到Java虚拟机(JVM)中时，Spring使用LoadTimeWeaver动态地转换类。
+
+要启动加载时编织，可以将@EnableLoadTimeWeaving添加到一个@Configuration类中，如下例所示:
+
+```java
+@Configuration
+@EnableLoadTimeWeaving
+public class AppConfig {
+}
+```
+
+或者，对于XML配置，你可以使用context:load-time-weaver元素:
+
+```xml
+<beans>
+    <context:load-time-weaver/>
+</beans>
+```
+
+一旦为ApplicationContext配置好，该ApplicationContext中的任何bean都可以实现LoadTimeWeaverAware，从而接收到加载时编织器实例的引用。这在与Spring的JPA支持结合时特别有用，因为在Spring的JPA类转换中可能需要加载时编织。更多细节请参考LocalContainerEntityManagerFactoryBean javadoc。有关AspectJ加载时编织的更多信息，请参见Spring框架中使用AspectJ的加载时编织。
+
+## 1.15. ApplicationContext的附加功能
+
+正如在本章的介绍中所讨论的，org.springframework.beans.factory包提供了管理和操作bean的基本功能，包括以编程的方式。org.springframework.context包添加了ApplicationContext接口，它扩展了BeanFactory接口，此外还扩展了其他接口，以更面向应用程序框架的风格提供额外的功能。许多人以一种完全声明式的方式使用ApplicationContext，甚至不以编程方式创建它，而是依靠支持类，如ContextLoader自动实例化ApplicationContext，作为Java EE web应用程序正常启动过程的一部分。
+
+为了以更面向框架的风格增强BeanFactory功能，context 包还提供了以下功能:
+
+- 通过MessageSource接口访问i18n风格的消息。
+
+- 通过ResourceLoader接口访问资源，例如url和文件。
+
+- 事件发布，即通过使用ApplicationEventPublisher接口发布到实现ApplicationListener接口的bean。
+
+- 加载多个(分层的)上下文，通过HierarchicalBeanFactory接口将每个上下文集中在一个特定的层上，例如应用程序的web层。
+
+### 1.15.1. 使用MessageSource接口国际化
+
+ApplicationContext接口扩展了一个名为MessageSource的接口，因此提供了国际化(“i18n”)功能。Spring还提供了HierarchicalMessageSource接口，该接口可以分层地解析消息。这些接口共同提供了Spring影响消息解析的基础。在这些接口上定义的方法包括:
+
+- String getMessage(String code, Object[] args, String default, Locale loc):用于从MessageSource检索消息的基本方法。如果没有找到针对指定地区的消息，则使用默认消息。通过使用标准库提供的MessageFormat功能，传入的任何参数都将成为替换值。
+
+- String getMessage(String code, Object[] args, Locale loc):本质上与前面的方法相同，但有一点不同:不能指定缺省消息。如果无法找到该消息，则抛出NoSuchMessageException。
+
+- String getMessage(MessageSourceResolvable resolvable, Locale locale):前面方法中使用的所有属性也被包装在一个名为MessageSourceResolvable的类中，您可以在此方法中使用该类。
+
+加载ApplicationContext时，它会自动搜索上下文中定义的MessageSource bean。bean必须具有messageSource的名称。如果找到了这样的bean，那么对上述方法的所有调用都将委托给消息源。如果没有找到消息源，ApplicationContext将尝试查找包含同名bean的父类。如果有，它就使用该bean作为MessageSource。如果ApplicationContext不能为消息找到任何源，则实例化一个空的DelegatingMessageSource，以便能够接受对上面定义的方法的调用。
+
+Spring提供了三种MessageSource实现，ResourceBundleMessageSource, ReloadableResourceBundleMessageSource和StaticMessageSource。它们都实现了HierarchicalMessageSource，以便进行嵌套消息传递。StaticMessageSource很少使用，但它提供了向源添加消息的编程方法。下面的例子显示了ResourceBundleMessageSource:
+
+```xml
+<beans>
+    <bean id="messageSource"
+            class="org.springframework.context.support.ResourceBundleMessageSource">
+        <property name="basenames">
+            <list>
+                <value>format</value>
+                <value>exceptions</value>
+                <value>windows</value>
+            </list>
+        </property>
+    </bean>
+</beans>
+```
+
+该示例假设您在类路径中定义了三个资源包，分别是format、exceptions和windows。任何解析消息的请求都采用通过ResourceBundle对象解析消息的jdk标准方式进行处理。为了本例的目的，假设上述两个资源包文件的内容如下:
+
+```properties
+    # in format.properties
+    message=Alligators rock!
+```
+
+```properties
+    # in exceptions.properties
+    argument.required=The {0} argument is required.
+```
+
+下一个示例显示运行MessageSource功能的程序。请记住，所有ApplicationContext实现也是MessageSource实现，因此可以转换为MessageSource接口。
+
+```java
+public static void main(String[] args) {
+    MessageSource resources = new ClassPathXmlApplicationContext("beans.xml");
+    String message = resources.getMessage("message", null, "Default", Locale.ENGLISH);
+    System.out.println(message);
+}
+```
+
+以上程序的输出结果如下所示:
+
+```
+Alligators rock!
+```
+
+总之，MessageSource定义在一个名为beans.xml的文件中，该文件存在于类路径的根目录中。messageSource bean定义通过其basenames属性引用许多资源包。在列表中传递给basenames属性的三个文件作为类路径根文件存在，分别称为format.properties, exceptions.properties, and windows.properties。
+
+下一个示例显示传递给消息查找的参数。这些参数被转换为String对象并插入到查找消息中的占位符中。
+
+```xml
+<beans>
+
+    <!-- this MessageSource is being used in a web application -->
+    <bean id="messageSource" class="org.springframework.context.support.ResourceBundleMessageSource">
+        <property name="basename" value="exceptions"/>
+    </bean>
+
+    <!-- lets inject the above MessageSource into this POJO -->
+    <bean id="example" class="com.something.Example">
+        <property name="messages" ref="messageSource"/>
+    </bean>
+
+</beans>
+```
+
+```java
+public class Example {
+
+    private MessageSource messages;
+
+    public void setMessages(MessageSource messages) {
+        this.messages = messages;
+    }
+
+    public void execute() {
+        String message = this.messages.getMessage("argument.required",
+            new Object [] {"userDao"}, "Required", Locale.ENGLISH);
+        System.out.println(message);
+    }
+}
+```
+
+调用execute()方法的结果输出如下所示:
+
+```
+The userDao argument is required.
+```
+
+关于国际化(“i18n”)，Spring的各种MessageSource实现遵循与标准JDK ResourceBundle相同的地区解析和回退规则。简而言之，继续前面定义的示例messageSource，如果希望根据British (en-GB)语言环境解析消息，则需要分别创建名为en_GB.properties、exceptions_en_GB.properties, and windows_en_GB.properties。
+
+通常，区域设置解析由应用程序的周围环境管理。在下面的例子中，解析(英国)消息的语言环境是手动指定的:
+
+```properties
+# in exceptions_en_GB.properties
+argument.required=Ebagum lad, the ''{0}'' argument is required, I say, required.
+```
+
+```java
+public static void main(final String[] args) {
+    MessageSource resources = new ClassPathXmlApplicationContext("beans.xml");
+    String message = resources.getMessage("argument.required",
+        new Object [] {"userDao"}, "Required", Locale.UK);
+    System.out.println(message);
+}
+```
+
+运行上述程序的输出结果如下所示:
+
+```
+Ebagum lad, the 'userDao' argument is required, I say, required.
+```
+
+您还可以使用MessageSourceAware接口来获取对已定义的任何MessageSource的引用。在创建和配置bean时，在实现MessageSourceAware接口的ApplicationContext中定义的任何bean都将被注入应用程序上下文的MessageSource。
+
+> 补充信息
+>
+> 因为Spring的MessageSource基于Java的ResourceBundle，所以它不会合并具有相同基名的包，而是只使用找到的第一个包。具有相同基名的后续消息包将被忽略。
+
+> 补充信息
+>
+> 作为ResourceBundleMessageSource的替代方案，Spring提供了一个ReloadableResourceBundleMessageSource类。该变体支持相同的包文件格式，但比基于标准JDK的ResourceBundleMessageSource实现更灵活。特别是，它允许从任何Spring资源位置读取文件(不仅仅是从类路径)，并支持包属性文件的热重新加载(同时在两者之间高效地缓存它们)。详见ReloadableResourceBundleMessageSource javadoc。
+
+### 1.15.2. 标准与自定义事件
+
+ApplicationContext中的事件处理是通过ApplicationEvent类和ApplicationListener接口提供的。如果将实现ApplicationListener接口的bean部署到上下文中，那么每次ApplicationEvent发布到ApplicationContext时，都会通知该bean。本质上，这是标准的Observer设计模式。
+
+> 说明
+>
+> 在Spring 4.2中，事件基础设施得到了显著的改进，并提供了基于注释的模型以及发布任意事件的能力(即不一定从ApplicationEvent扩展的对象)。当这样的对象被发布时，我们为您将其包装在一个事件中。
+
+下表描述了Spring提供的标准事件:
+
+| 事件                       | 说明                                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| ContextRefreshedEvent      | 当ApplicationContext初始化或刷新时发布(例如，通过使用ConfigurableApplicationContext接口上的refresh()方法)。在这里，“初始化”意味着加载所有bean，检测和激活后处理器bean，预实例化单例，并准备使用ApplicationContext对象。只要上下文没有关闭，刷新就可以被触发多次，只要所选的ApplicationContext实际上支持这种“热”刷新。例如，XmlWebApplicationContext支持热刷新，但GenericApplicationContext不支持。 |
+| ContextStartedEvent        | 在使用ConfigurableApplicationContext接口上的start()方法启动ApplicationContext时发布。在这里，“started”意味着所有生命周期bean都接收一个显式的开始信号。通常，此信号用于显式停止后重新启动bean，但它也可以用于启动未配置为自动启动的组件(例如，在初始化时尚未启动的组件)。 |
+| ContextStoppedEvent        | 在使用ConfigurableApplicationContext接口上的stop()方法停止ApplicationContext时发布。在这里，“停止”意味着所有生命周期bean都接收到一个显式的停止信号。一个已停止的上下文可以通过start()调用重新启动。 |
+| ContextClosedEvent         | 通过在ConfigurableApplicationContext接口上使用close()方法或通过JVM关闭钩子关闭ApplicationContext时发布。在这里，“关闭”意味着将销毁所有单例bean。一旦上下文被关闭，它就会到达生命的尽头，无法刷新或重新启动。 |
+| RequestHandledEvent        | 一个特定于web的事件，告诉所有bean一个HTTP请求已经得到服务。此事件在请求完成后发布。此事件仅适用于使用Spring的DispatcherServlet的web应用程序。 |
+| ServletRequestHandledEvent | RequestHandledEvent的子类，用于添加特定于servlet的上下文信息。 |
+
+您还可以创建和发布自己的自定义事件。下面的例子展示了一个扩展Spring的ApplicationEvent基类的简单类:
+
+```java
+public class BlockedListEvent extends ApplicationEvent {
+
+    private final String address;
+    private final String content;
+
+    public BlockedListEvent(Object source, String address, String content) {
+        super(source);
+        this.address = address;
+        this.content = content;
+    }
+
+    // accessor and other methods...
+}
+```
+
+要发布一个自定义的ApplicationEvent，调用ApplicationEventPublisher上的publishEvent()方法。通常，这是通过创建实现ApplicationEventPublisherAware的类并将其注册为Spring bean来实现的。下面的例子展示了这样一个类:
+
+```java
+public class EmailService implements ApplicationEventPublisherAware {
+
+    private List<String> blockedList;
+    private ApplicationEventPublisher publisher;
+
+    public void setBlockedList(List<String> blockedList) {
+        this.blockedList = blockedList;
+    }
+
+    public void setApplicationEventPublisher(ApplicationEventPublisher publisher) {
+        this.publisher = publisher;
+    }
+
+    public void sendEmail(String address, String content) {
+        if (blockedList.contains(address)) {
+            publisher.publishEvent(new BlockedListEvent(this, address, content));
+            return;
+        }
+        // send email...
+    }
+}
+```
+
+在配置时，Spring容器检测到EmailService实现了ApplicationEventPublisherAware，并自动调用setApplicationEventPublisher()。实际上，传入的参数是Spring容器本身。您正在通过应用程序上下文的ApplicationEventPublisher接口与它交互。
+
+要接收自定义的ApplicationEvent，您可以创建实现ApplicationListener的类，并将其注册为Spring bean。下面的例子展示了这样一个类:
+
+```java
+public class BlockedListNotifier implements ApplicationListener<BlockedListEvent> {
+
+    private String notificationAddress;
+
+    public void setNotificationAddress(String notificationAddress) {
+        this.notificationAddress = notificationAddress;
+    }
+
+    public void onApplicationEvent(BlockedListEvent event) {
+        // notify appropriate parties via notificationAddress...
+    }
+}
+```
+
+注意，ApplicationListener使用自定义事件的类型进行了一般参数化(在前面的例子中为BlockedListEvent)。这意味着onApplicationEvent()方法可以保持类型安全，避免任何向下转换的需要。您可以根据需要注册任意数量的事件监听器，但请注意，默认情况下，事件监听器同步接收事件。这意味着publishEvent()方法会阻塞，直到所有侦听器都完成对事件的处理。这种同步和单线程方法的一个优点是，当侦听器接收到事件时，如果事务上下文可用，它将在发布器的事务上下文中操作。如果需要另一种策略来发布事件，请参阅javadoc Spring的ApplicationEventMulticaster接口和SimpleApplicationEventMulticaster实现中的配置选项。
+
+下面的示例显示了用于注册和配置上述每个类的bean定义:
+
+```xml
+<bean id="emailService" class="example.EmailService">
+    <property name="blockedList">
+        <list>
+            <value>known.spammer@example.org</value>
+            <value>known.hacker@example.org</value>
+            <value>john.doe@example.org</value>
+        </list>
+    </property>
+</bean>
+
+<bean id="blockedListNotifier" class="example.BlockedListNotifier">
+    <property name="notificationAddress" value="blockedlist@example.org"/>
+</bean>
+```
+
+把它们放在一起，当调用emailService bean的sendEmail()方法时，如果有任何应该阻止的电子邮件消息，则会发布一个BlockedListEvent类型的自定义事件。blockedListNotifier bean被注册为ApplicationListener并接收BlockedListEvent，此时它可以通知适当的方。
+
+> 补充信息
+>
+> Spring的事件机制设计用于在相同应用程序上下文中的Spring bean之间进行简单通信。然而，对于更复杂的企业集成需求，单独维护的Spring integration项目为构建轻量级的、面向模式的、事件驱动的体系结构提供了完整的支持，这些体系结构构建在众所周知的Spring编程模型之上。
+
+#### 基于注解的事件监听
+
+您可以使用@EventListener注释在托管bean的任何方法上注册一个事件监听器。BlockedListNotifier可以重写如下:
+
+```java
+public class BlockedListNotifier {
+
+    private String notificationAddress;
+
+    public void setNotificationAddress(String notificationAddress) {
+        this.notificationAddress = notificationAddress;
+    }
+
+    @EventListener
+    public void processBlockedListEvent(BlockedListEvent event) {
+        // notify appropriate parties via notificationAddress...
+    }
+}
+```
+
+方法签名再次声明它侦听的事件类型，但这一次使用了一个灵活的名称，并且没有实现特定的侦听器接口。只要实际事件类型在实现层次结构中解析泛型参数，就可以通过泛型缩小事件类型。
+
+如果您的方法应该监听多个事件，或者如果您想在定义它时不使用任何参数，那么也可以在注释本身上指定事件类型。下面的例子展示了如何做到这一点:
+
+```java
+@EventListener({ContextStartedEvent.class, ContextRefreshedEvent.class})
+public void handleContextStart() {
+    // ...
+}
+```
+
+还可以通过使用定义SpEL表达式的注释的条件属性来添加附加的运行时筛选，它应该匹配以实际调用特定事件的方法。
+
+下面的例子展示了如何重写我们的通知器，使其仅在事件的内容属性等于my-event时才被调用:
+
+```java
+@EventListener(condition = "#blEvent.content == 'my-event'")
+public void processBlockedListEvent(BlockedListEvent blEvent) {
+    // notify appropriate parties via notificationAddress...
+}
+```
+
+每个SpEL表达式针对一个专用上下文进行计算。下表列出了对上下文可用的项，以便您可以使用它们进行条件事件处理:
+
+| 名称            | 位置               | 描述                                                         | 示例                                                         |
+| --------------- | ------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Event           | root object        | 实际的ApplicationEvent。                                     | #root.event` or `event                                       |
+| Arguments array | root object        | 用于调用方法的参数(作为对象数组)。                           | `#root.args` or `args`; `args[0]` to access the first argument, etc. |
+| *Argument name* | evaluation context | 任何方法参数的名称。如果由于某种原因，名称不可用(例如，因为在编译的字节码中没有调试信息)，也可以使用#a<#arg>语法，其中<#arg>表示参数索引(从0开始)。 | `#blEvent` or `#a0` (you can also use `#p0` or `#p<#arg>` parameter notation as an alias) |
+
+请注意 #root.event ，使您能够访问底层事件，即使您的方法签名实际上引用了已发布的任意对象。
+
+如果你需要发布一个事件作为处理另一个事件的结果，你可以改变方法签名来返回应该发布的事件，如下例所示:
+
+```java
+@EventListener
+public ListUpdateEvent handleBlockedListEvent(BlockedListEvent event) {
+    // notify appropriate parties via notificationAddress and
+    // then publish a ListUpdateEvent...
+}
+```
+
+> 异步侦听器不支持此特性。
+
+handleBlockedListEvent()方法为它处理的每个BlockedListEvent发布一个新的ListUpdateEvent。如果需要发布多个事件，则可以返回一个Collection或事件数组。
+
+#### 异步监听
+
+如果您想要一个特定的侦听器异步处理事件，您可以重用常规的@Async支持。下面的例子展示了如何做到这一点:
+
+```java
+@EventListener
+@Async
+public void processBlockedListEvent(BlockedListEvent event) {
+    // BlockedListEvent is processed in a separate thread
+}
+```
+
+使用异步事件时要注意以下限制:
+
+- 如果异步事件监听器抛出异常，则不会将其传播给调用者。更多细节请参见AsyncUncaughtExceptionHandler。
+
+- 异步事件监听器方法不能通过返回值来发布后续事件。如果您需要作为处理的结果发布另一个事件，请注入一个ApplicationEventPublisher来手动发布事件。
+
+#### 订购监听
+
+如果你需要一个监听器在另一个监听器之前被调用，你可以在方法声明中添加@Order注释，如下面的例子所示:
+
+```java
+@EventListener
+@Order(42)
+public void processBlockedListEvent(BlockedListEvent event) {
+    // notify appropriate parties via notificationAddress...
+}
+```
+
+#### 泛型事件
+
+还可以使用泛型进一步定义事件的结构。考虑使用EntityCreatedEvent<t>，其中T是被创建的实际实体的类型。</t>例如，您可以创建以下侦听器定义来仅接收Person的EntityCreatedEvent:
+
+```java
+@EventListener
+public void onPersonCreated(EntityCreatedEvent<Person> event) {
+    // ...
+}
+```
+
+由于类型擦除，只有当触发的事件解析事件监听器筛选的泛型参数(也就是说，类PersonCreatedEvent扩展了EntityCreatedEvent <Person>{…})时，这种方法才有效。
+
+在某些情况下，如果所有事件都遵循相同的结构，这可能会变得非常繁琐(对于上例中的事件应该是这样)。在这种情况下，您可以实现ResolvableTypeProvider来指导框架超越运行时环境所提供的内容。下面的事件显示了如何做到这一点:
+
+```java
+public class EntityCreatedEvent<T> extends ApplicationEvent implements ResolvableTypeProvider {
+
+    public EntityCreatedEvent(T entity) {
+        super(entity);
+    }
+
+    @Override
+    public ResolvableType getResolvableType() {
+        return ResolvableType.forClassWithGenerics(getClass(), ResolvableType.forInstance(getSource()));
+    }
+}
+```
+
+> 说明
+>
+> 这不仅适用于ApplicationEvent，还适用于作为事件发送的任何任意对象。
+
+### 1.15.3. 方便地访问低级资源
+
+为了优化应用程序上下文的使用和理解，您应该熟悉Spring的Resource抽象，如参考资料中所述。
+
+应用程序上下文是一个ResourceLoader，可用于加载Resource对象。Resource本质上是JDK java.net.URL类的一个功能更丰富的版本。事实上，Resource的实现在适当的地方包装了java.net.URL的实例。Resource可以以透明的方式从几乎任何位置获得低级资源，包括从类路径、文件系统位置、任何可以用标准URL描述的位置，以及其他一些变体。如果资源位置字符串是没有任何特殊前缀的简单路径，那么这些资源的来源是特定的，并且适合于实际的应用程序上下文类型。
+
+您可以配置部署到应用程序上下文中的bean，以实现特殊的回调接口ResourceLoaderAware，该接口在初始化时自动回调，同时将应用程序上下文本身作为ResourceLoader传入。您还可以公开Resource类型的属性，以用于访问静态资源。它们像其他属性一样被注入其中。您可以将这些Resource属性指定为简单的String路径，并在部署bean时依靠从这些文本字符串到实际Resource对象的自动转换。
+
+提供给ApplicationContext构造函数的位置路径或路径实际上是资源字符串，以简单的形式根据特定的上下文实现进行适当处理。例如，ClassPathXmlApplicationContext将一个简单的位置路径视为一个类路径位置。您还可以使用带有特殊前缀的位置路径(资源字符串)来强制从类路径或URL加载定义，而不管实际的上下文类型是什么。
+
+### 1.15.4. 应用程序启动跟踪
+
+ApplicationContext管理Spring应用程序的生命周期，并围绕组件提供丰富的编程模型。因此，复杂的应用程序可能具有同样复杂的组件图和启动阶段。
+
+用特定的指标跟踪应用程序启动步骤可以帮助了解启动阶段的时间花费在哪里，但它也可以作为一种更好地理解整个上下文生命周期的方法。
+
+AbstractApplicationContext(及其子类)使用ApplicationStartup进行检测，后者收集关于各种启动阶段的StartupStep数据:
+
+- 应用程序上下文生命周期(基本包扫描、配置类管理)
+
+- bean生命周期(实例化、智能初始化、后处理)
+
+- 应用程序事件处理
+
+下面是AnnotationConfigApplicationContext中的插装示例:
+
+```java
+// create a startup step and start recording
+StartupStep scanPackages = this.getApplicationStartup().start("spring.context.base-packages.scan");
+// add tagging information to the current step
+scanPackages.tag("packages", () -> Arrays.toString(basePackages));
+// perform the actual phase we're instrumenting
+this.scanner.scan(basePackages);
+// end the current step
+scanPackages.end();
+```
+
+应用程序上下文已经用多个步骤进行了测试。一旦记录下来，这些启动步骤就可以用特定的工具收集、显示和分析。关于现有启动步骤的完整列表，您可以查看专用的附录部分。
+
+默认的ApplicationStartup实现是一个无操作的变体，以实现最小的开销。这意味着在默认情况下，在应用程序启动期间不会收集任何指标。Spring框架附带了一个用于跟踪Java FlightRecorder启动步骤的实现:FlightRecorderApplicationStartup。要使用此变体，您必须在创建它后立即将其实例配置到ApplicationContext。
+
+如果开发人员正在提供自己的AbstractApplicationContext子类，或者希望收集更精确的数据，他们也可以使用ApplicationStartup基础设施。
+
+> 注意
+>
+> ApplicationStartup只能在应用程序启动期间用于核心容器;这绝不是Java剖析器或度量库(如Micrometer)的替代品。
+
+要开始收集自定义的StartupStep，组件可以直接从应用程序上下文中获取ApplicationStartup实例，让它们的组件实现ApplicationStartupAware，或者在任何注入点上请求ApplicationStartup类型。
+
+> 开发人员不应该使用“spring.*”。创建自定义启动步骤时的命名空间。这个名称空间是为Spring内部使用保留的，可能会发生变化。
+
+### 1.15.5. 方便的Web应用程序的ApplicationContext实例化
+
+您可以通过使用(例如，ContextLoader)声明式地创建ApplicationContext实例。当然，您也可以通过使用ApplicationContext实现之一以编程方式创建ApplicationContext实例。
+
+你可以使用ContextLoaderListener来注册一个ApplicationContext，如下面的例子所示:
+
+```xml
+<context-param>
+    <param-name>contextConfigLocation</param-name>
+    <param-value>/WEB-INF/daoContext.xml /WEB-INF/applicationContext.xml</param-value>
+</context-param>
+
+<listener>
+    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+</listener>
+```
+
+监听器检查contextConfigLocation参数。如果该参数不存在，侦听器将使用/WEB-INF/applicationContext.xml作为默认值。当参数存在时，监听器使用预定义的分隔符(逗号、分号和空格)将String分隔开，并使用值作为搜索应用程序上下文的位置。也支持蚁式路径模式。例如/WEB-INF/*Context.xml(用于所有名称以Context.xml结尾且位于WEB-INF目录中的文件)和/WEB-INF/**/*Context.xml(用于WEB-INF任意子目录中的所有此类文件)。
+
+### 1.15.6.将Spring ApplicationContext部署为Java EE RAR文件
+
+可以将Spring ApplicationContext部署为RAR文件，将上下文及其所有所需的bean类和库jar封装在Java EE RAR部署单元中。这相当于引导能够访问Java EE服务器设施的独立ApplicationContext(仅托管在Java EE环境中)。RAR部署是部署无头WAR文件的一种更自然的替代方案——实际上，一个没有任何HTTP入口点的WAR文件仅用于在Java EE环境中引导Spring ApplicationContext。
+
+RAR部署非常适合不需要HTTP入口点而只由消息端点和计划的作业组成的应用程序上下文。在这样的上下文中，bean可以使用JTA事务管理器、JNDI绑定的JDBC DataSource实例和JMS ConnectionFactory实例等应用程序服务器资源，还可以通过Spring的标准事务管理、JNDI和JMX支持工具向平台的JMX服务器注册。应用组件还可以通过Spring的TaskExecutor抽象与应用服务器的JCA WorkManager交互。
+
+有关RAR部署中涉及的配置细节，请参阅SpringContextResourceAdapter类的javadoc。
+
+将Spring ApplicationContext作为Java EE RAR文件进行简单部署:
+
+1. 将所有应用程序类打包到一个RAR文件中(RAR文件是一个具有不同文件扩展名的标准JAR文件)。
+
+2. 将所有必需的库jar添加到RAR归档文件的根中。
+
+3. 添加一个META-INF/ra.xml部署描述符(如用于SpringContextResourceAdapter的javadoc所示)和相应的Spring XML bean定义文件(通常是META-INF/applicationContext.xml)。
+
+4. 将生成的RAR文件放到应用程序服务器的部署目录中。
+
+> 补充信息
+>
+> 这种RAR部署单元通常是自包含的。它们不向外界公开组件，甚至不向同一应用程序的其他模块公开组件。与基于rar的ApplicationContext的交互通常通过它与其他模块共享的JMS目的地发生。例如，基于rar的ApplicationContext还可以调度一些作业或对文件系统中的新文件(或类似的东西)作出反应。如果它需要允许来自外部的同步访问，它可以(例如)导出RMI端点，这可以被同一机器上的其他应用程序模块使用。
+
+## 1.16.`BeanFactory` API
+
+BeanFactory API为Spring的IoC功能提供了底层基础。它的特定契约主要用于与Spring的其他部分和相关的第三方框架集成，它的DefaultListableBeanFactory实现是高级GenericApplicationContext容器中的一个关键委托。
+
+BeanFactory和相关接口(如BeanFactoryAware、InitializingBean、DisposableBean)是其他框架组件的重要集成点。由于不需要任何注释甚至反射，它们允许在容器及其组件之间进行非常高效的交互。应用程序级bean可以使用相同的回调接口，但通常更喜欢声明性依赖注入，或者通过注释，或者通过编程配置。
+
+请注意，核心BeanFactory API级别及其DefaultListableBeanFactory实现不假设要使用的配置格式或任何组件注释。所有这些风格都是通过扩展(如XmlBeanDefinitionReader和AutowiredAnnotationBeanPostProcessor)来实现的，并将共享BeanDefinition对象作为核心元数据表示来操作。这是使Spring的容器如此灵活和可扩展的本质。
+
+### 1.16.1.`BeanFactory` 还是 `ApplicationContext`?
+
+本节解释BeanFactory和ApplicationContext容器级别之间的区别以及引导的含义。
+
+您应该使用ApplicationContext，除非您有很好的理由不这样做，使用GenericApplicationContext及其子类AnnotationConfigApplicationContext作为自定义引导的通用实现。这些是Spring核心容器的主要入口点，用于所有常见目的:加载配置文件、触发类路径扫描、以编程方式注册bean定义和注释类，以及(从5.0开始)注册功能性bean定义。
+
+因为ApplicationContext包含BeanFactory的所有功能，所以除了需要对bean处理进行完全控制的场景外，一般建议使用ApplicationContext而不是普通BeanFactory。在ApplicationContext(例如GenericApplicationContext实现)中，有几种类型的bean是通过约定(即通过bean名称或bean类型—特别是后处理器)检测的，而普通的DefaultListableBeanFactory则与任何特殊的bean无关。
+
+对于许多扩展容器特性，例如注释处理和AOP代理，BeanPostProcessor扩展点是必不可少的。如果只使用普通的DefaultListableBeanFactory，则默认情况下不会检测和激活这种后处理器。这种情况可能令人困惑，因为您的bean配置实际上没有任何错误。相反，在这种情况下，需要通过额外的设置来完全引导容器。
+
+下表列出了BeanFactory和ApplicationContext接口和实现提供的特性。
+
+| 特性                                | BeanFactory | ApplicationContext |
+| ----------------------------------- | ----------- | ------------------ |
+| Bean实例化/布线                     | Yes         | Yes                |
+| 集成的生命周期管理                  | No          | Yes                |
+| 自动BeanPostProcessor登记           | No          | Yes                |
+| 自动BeanFactoryPostProcessor登记    | No          | Yes                |
+| 方便的MessageSource访问(用于国际化) | No          | Yes                |
+| 内置的ApplicationEvent发布机制      | No          | Yes                |
+
+要显式地用DefaultListableBeanFactory注册一个bean后处理器，您需要以编程方式调用addBeanPostProcessor，如下例所示:
+
+```java
+DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+// populate the factory with bean definitions
+
+// now register any needed BeanPostProcessor instances
+factory.addBeanPostProcessor(new AutowiredAnnotationBeanPostProcessor());
+factory.addBeanPostProcessor(new MyBeanPostProcessor());
+
+// now start using the factory
+```
+
+要将BeanFactoryPostProcessor应用到普通的DefaultListableBeanFactory，您需要调用它的postProcessBeanFactory方法，如下面的示例所示:
+
+```java
+DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(factory);
+reader.loadBeanDefinitions(new FileSystemResource("beans.xml"));
+
+// bring in some property values from a Properties file
+PropertySourcesPlaceholderConfigurer cfg = new PropertySourcesPlaceholderConfigurer();
+cfg.setLocation(new FileSystemResource("jdbc.properties"));
+
+// now actually do the replacement
+cfg.postProcessBeanFactory(factory);
+```
+
+在这两种情况下，显式注册步骤都是不方便的，这就是为什么在spring支持的应用程序中，各种ApplicationContext变量优于普通的DefaultListableBeanFactory，特别是在典型企业设置中依赖BeanFactoryPostProcessor和BeanPostProcessor实例来实现扩展容器功能时。
+
+> 补充信息
+>
+> AnnotationConfigApplicationContext注册了所有公共注释后处理器，并可能通过配置注释引入额外的处理器，例如@EnableTransactionManagement。在Spring基于注释的配置模型的抽象级别，bean后处理器的概念仅仅是内部容器的细节。
 
 
 
